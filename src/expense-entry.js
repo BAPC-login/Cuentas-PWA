@@ -4,12 +4,13 @@ const API_EXPENSE = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const TOKEN_EXPENSE = 'cuentas-pwa:session-token';
 
 setTimeout(initExpenseEntry, 1800);
-window.addEventListener('family-data-changed', () => hydrateExpenseEntry());
+window.addEventListener('family-data-changed', () => { hydrateExpenseEntry(); setTimeout(enhanceBillCards, 450); });
 
 function initExpenseEntry() {
   injectStyles();
   injectExpenseForm();
   document.addEventListener('click', handleExpenseActions);
+  setInterval(enhanceBillCards, 1400);
   hydrateExpenseEntry();
 }
 
@@ -49,6 +50,7 @@ async function hydrateExpenseEntry() {
     window.__expenseUsers = (users.users?.length ? users.users : [me.user]).filter((u) => u && u.status !== 'revoked');
     renderExpenseOptions(cats.categories || [], ops.operations || []);
     renderExpenseParticipants();
+    enhanceBillCards();
   } catch (error) {
     console.warn('expense entry', error);
   }
@@ -73,6 +75,14 @@ function renderExpenseParticipants() {
   if (!box) return;
   box.innerHTML = users.map((u) => `<label class="participant-row"><input type="checkbox" data-expense-check value="${escapeHtml(u.id)}" checked><span>${escapeHtml(u.name || u.email)}</span><input data-expense-share="${escapeHtml(u.id)}" type="number" min="0" step="1" value="0"></label>`).join('');
   splitExpenseEven(true);
+}
+
+function enhanceBillCards() {
+  document.querySelectorAll('.real-bill-card[data-bill-id]').forEach((card) => {
+    const id = card.dataset.billId;
+    if (!id || card.querySelector('[data-action="delete-bill"]')) return;
+    card.insertAdjacentHTML('beforeend', `<button class="tiny-button danger-mini" data-action="delete-bill" data-id="${escapeHtml(id)}" type="button">Eliminar gasto</button>`);
+  });
 }
 
 async function submitExpense(event) {
@@ -145,6 +155,6 @@ function splitExpenseEven(force = true) {
 function splitValues(ids, amount) { const base = Math.floor(amount / ids.length); return ids.map((id, index) => [id, index === ids.length - 1 ? amount - base * (ids.length - 1) : base]); }
 async function api(path, options = {}) { const headers = new Headers(options.headers || {}); headers.set('content-type', 'application/json'); headers.set('authorization', 'Bearer ' + localStorage.getItem(TOKEN_EXPENSE)); const res = await fetch(API_EXPENSE + path, { ...options, headers }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.message || data.error || 'Error API'); return data; }
 function amountValue(selector) { return Number(String(document.querySelector(selector)?.value || '').replace(/[^0-9]/g, '')); }
-function injectStyles() { if (document.querySelector('#expenseEntryStyles')) return; const style = document.createElement('style'); style.id = 'expenseEntryStyles'; style.textContent = `#expenseEntryPanel{border-color:rgba(56,189,248,.25)}#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr 130px}@media(max-width:760px){#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr}#expenseEntryPanel .participant-row input[type="number"]{grid-column:2;width:100%}}`; document.head.appendChild(style); }
+function injectStyles() { if (document.querySelector('#expenseEntryStyles')) return; const style = document.createElement('style'); style.id = 'expenseEntryStyles'; style.textContent = `#expenseEntryPanel{border-color:rgba(56,189,248,.25)}#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr 130px}.danger-mini{background:rgba(248,113,113,.12)!important;border-color:rgba(248,113,113,.36)!important}@media(max-width:760px){#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr}#expenseEntryPanel .participant-row input[type="number"]{grid-column:2;width:100%}}`; document.head.appendChild(style); }
 function money(value) { return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Number(value || 0)); }
 function escapeHtml(value) { return String(value || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c])); }
