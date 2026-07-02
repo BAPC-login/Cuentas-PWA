@@ -1,5 +1,6 @@
 import('./bill-evidence.js').catch(() => {});
 import('./net-settlement.js').catch(() => {});
+import('./payment-allocation-fix.js').catch(() => {});
 
 const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
