@@ -1,10 +1,21 @@
 # Cuentas Hogar PWA
 
-Primera versión de una app moderna para llevar cuentas del hogar entre usuarios.
+App personal moderna para llevar cuentas del hogar entre usuarios.
 
 ## Frontend publicado
 
 `https://bapc-login.github.io/Cuentas-PWA/`
+
+## Estado actual
+
+- PWA publicada en GitHub Pages.
+- Backend en Cloudflare Workers.
+- D1 configurado para usuarios, códigos, sesiones y movimientos futuros.
+- Login por correo + código temporal.
+- Sesiones persistentes hasta logout o revocación del owner.
+- Owner puede crear usuarios por correo, revocar y reactivar.
+- Resend es opcional.
+- Para uso personal, se agregó relay gratuito con Google Apps Script + GmailApp.
 
 ## Qué incluye esta versión
 
@@ -12,16 +23,15 @@ Primera versión de una app moderna para llevar cuentas del hogar entre usuarios
 - Interfaz responsive para celular y computador.
 - Usuarios personalizados administrados por el owner.
 - Vista por usuario: la misma cuenta se expresa distinto según quién esté mirando.
-- Registro de movimientos con deudor, acreedor, monto, fecha y detalle.
+- Registro local de movimientos con deudor, acreedor, monto, fecha y detalle.
 - Adjuntar comprobante de pago como imagen comprimida.
 - Marcar movimientos como pendientes o pagados.
 - Resumen de saldos y relaciones entre usuarios.
 - Exportar/importar respaldo JSON.
-- Soporte offline mediante service worker.
 
-## Backend preparado
+## Backend
 
-Se agregó una base de API con Cloudflare Workers y D1 en `backend/src/index.js`.
+API principal en `backend/src/index.js`.
 
 Endpoints incluidos:
 
@@ -30,24 +40,33 @@ Endpoints incluidos:
 - `POST /auth/verify-code`
 - `POST /auth/logout`
 - `GET /me`
+- `PATCH /me/profile`
 - `GET /owner/users`
 - `POST /owner/users`
 - `PATCH /owner/users/:id/revoke`
 - `PATCH /owner/users/:id/reactivate`
 
-La sesión queda persistente hasta logout o revocación del owner.
+## Email gratis con GmailApp
 
-## Cómo desplegar backend después
+Ver `docs/EMAIL_RELAY_APPS_SCRIPT.md`.
 
-1. Crear D1 en Cloudflare.
-2. Copiar `wrangler.toml.example` como `wrangler.toml`.
-3. Pegar el `database_id` real.
-4. Ejecutar migraciones con Wrangler.
-5. Desplegar el Worker.
-6. Conectar el frontend a la URL del Worker.
+Resumen:
+
+1. Crear Google Apps Script.
+2. Pegar `apps-script/email-relay.gs`.
+3. Definir una clave secreta.
+4. Publicar como Web App.
+5. Guardar URL y secreto en Cloudflare:
+
+```powershell
+npx wrangler secret put EMAIL_RELAY_URL
+npx wrangler secret put EMAIL_RELAY_SECRET
+npx wrangler deploy
+```
 
 ## Pendiente
 
-- Enviar códigos por correo real con Resend u otro proveedor.
-- Mover movimientos y comprobantes desde localStorage a D1.
-- Conectar la UI de login al backend real.
+- Persistir movimientos en D1 para sincronizar entre celulares.
+- Mejorar la ventana de perfil en el frontend.
+- Mejorar manejo visual de errores.
+- Agregar edición de perfil y nombre visible desde el panel.
