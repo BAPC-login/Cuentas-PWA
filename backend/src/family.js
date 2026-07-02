@@ -1,3 +1,5 @@
+import { assertMonthOpen, firstClosedMonth, monthClosedPayload } from './month_lock.js';
+
 export async function listCategories(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
@@ -63,6 +65,8 @@ async function createBillRecord(env, user, body) {
   const participants = normalizeParticipants(body.participants, total);
   if (!title || !categoryId || total <= 0) return { error: 'invalid_bill', message: 'Faltan datos de la cuenta.', status: 400 };
   if (!participants.length) return { error: 'participants_required', message: 'Selecciona al menos un participante.', status: 400 };
+  const locked = await assertMonthOpen(env, serviceMonth);
+  if (locked) return locked;
   const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
   if (shareSum !== total) return { error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.', status: 400 };
   const billId = 'bill-' + crypto.randomUUID();
@@ -80,12 +84,15 @@ export async function updateBillParticipants(request, env) {
   const bill = await getBill(env, id);
   if (!bill) return json({ error: 'bill_not_found', message: 'Cuenta no encontrada.' }, env, 404);
   const body = await readJson(request);
+  const targetMonth = normalizeMonth(body.service_month || bill.service_month || bill.bill_date);
+  const lockedMonth = await firstClosedMonth(env, [billMonth(bill), targetMonth]);
+  if (lockedMonth) return json(monthClosedPayload(lockedMonth), env, 423);
   const total = toInt(body.total_amount || bill.total_amount);
   const participants = normalizeParticipants(body.participants, total);
   const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
   if (!participants.length || shareSum !== total) return json({ error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.' }, env, 400);
   await env.DB.prepare('UPDATE bills SET category_id = ?, title = ?, description = ?, total_amount = ?, bill_date = ?, due_date = ?, service_month = ?, operation_id = ?, updated_at = ? WHERE id = ?')
-    .bind(body.category_id || bill.category_id, body.title || bill.title, body.description ?? bill.description, total, String(body.bill_date || bill.bill_date).slice(0, 10), body.due_date || bill.due_date || null, normalizeMonth(body.service_month || bill.service_month || bill.bill_date), body.operation_id || bill.operation_id || null, new Date().toISOString(), id)
+    .bind(body.category_id || bill.category_id, body.title || bill.title, body.description ?? bill.description, total, String(body.bill_date || bill.bill_date).slice(0, 10), body.due_date || bill.due_date || null, targetMonth, body.operation_id || bill.operation_id || null, new Date().toISOString(), id)
     .run();
   await replaceBillParticipants(env, id, participants);
   await refreshBillStatuses(env, [id]);
@@ -110,6 +117,10 @@ export async function updateBillStatus(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
   const id = pathPart(request, 1);
+  const bill = await getBill(env, id);
+  if (!bill) return json({ error: 'bill_not_found', message: 'Cuenta no encontrada.' }, env, 404);
+  const locked = await assertMonthOpen(env, billMonth(bill));
+  if (locked) return json(locked, env, locked.status);
   const { status } = await readJson(request);
   const allowed = ['open', 'partial', 'paid', 'overdue', 'cancelled'];
   if (!allowed.includes(status)) return json({ error: 'invalid_status', message: 'Estado invalido.' }, env, 400);
@@ -132,12 +143,14 @@ export async function createPayment(request, env) {
   const body = await readJson(request);
   const total = toInt(body.total_amount);
   const payerId = String(body.payer_id || auth.user.id).trim();
+  const allocations = Array.isArray(body.allocations) ? body.allocations : [];
+  const lockedMonth = await firstClosedAllocatedBillMonth(env, allocations);
+  if (lockedMonth) return json(monthClosedPayload(lockedMonth), env, 423);
   if (total <= 0 || !payerId) return json({ error: 'invalid_payment', message: 'Pago invalido.' }, env, 400);
   const paymentId = 'pay-' + crypto.randomUUID();
   await env.DB.prepare('INSERT INTO payments (id, payer_id, receiver_id, total_amount, paid_at, status, note, source, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(paymentId, payerId, body.receiver_id || null, total, String(body.paid_at || today()).slice(0, 10), body.status || 'pending_review', body.note || null, body.source || 'manual', auth.user.id)
     .run();
-  const allocations = Array.isArray(body.allocations) ? body.allocations : [];
   for (const a of allocations) {
     const billId = String(a.bill_id || '').trim();
     const userId = String(a.user_id || payerId).trim();
@@ -278,10 +291,13 @@ export async function createOperation(request, env) {
   const body = await readJson(request);
   const title = String(body.title || '').trim();
   const categoryId = String(body.category_id || '').trim();
+  const serviceMonth = normalizeMonth(body.service_month || today().slice(0, 7));
   if (!title || !categoryId) return json({ error: 'invalid_operation', message: 'Falta titulo o categoria.' }, env, 400);
+  const locked = await assertMonthOpen(env, serviceMonth);
+  if (locked) return json(locked, env, locked.status);
   const id = 'op-' + crypto.randomUUID();
   await env.DB.prepare('INSERT INTO operations (id, title, description, category_id, service_month, expense_date, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, title, body.description || null, categoryId, normalizeMonth(body.service_month || today().slice(0,7)), String(body.expense_date || today()).slice(0,10), body.status || 'open', auth.user.id)
+    .bind(id, title, body.description || null, categoryId, serviceMonth, String(body.expense_date || today()).slice(0, 10), body.status || 'open', auth.user.id)
     .run();
   return json({ ok: true, operation: await getOperation(env, id) }, env, 201);
 }
@@ -293,8 +309,11 @@ export async function updateOperation(request, env) {
   const operation = await getOperation(env, id);
   if (!operation) return json({ error: 'operation_not_found', message: 'Operacion no encontrada.' }, env, 404);
   const body = await readJson(request);
+  const targetMonth = normalizeMonth(body.service_month || operation.service_month || operation.expense_date);
+  const lockedMonth = await firstClosedMonth(env, [operationMonth(operation), targetMonth]);
+  if (lockedMonth) return json(monthClosedPayload(lockedMonth), env, 423);
   await env.DB.prepare('UPDATE operations SET title = ?, description = ?, category_id = ?, service_month = ?, expense_date = ?, status = ?, updated_at = ? WHERE id = ?')
-    .bind(body.title || operation.title, body.description ?? operation.description, body.category_id || operation.category_id, normalizeMonth(body.service_month || operation.service_month), String(body.expense_date || operation.expense_date).slice(0,10), body.status || operation.status, new Date().toISOString(), id)
+    .bind(body.title || operation.title, body.description ?? operation.description, body.category_id || operation.category_id, targetMonth, String(body.expense_date || operation.expense_date).slice(0, 10), body.status || operation.status, new Date().toISOString(), id)
     .run();
   return json({ ok: true, operation: await getOperation(env, id) }, env);
 }
@@ -309,6 +328,16 @@ async function refreshBillStatuses(env, billIds) {
     await env.DB.prepare('UPDATE bills SET status = ?, updated_at = ? WHERE id = ?').bind(status, new Date().toISOString(), id).run();
     await env.DB.prepare("UPDATE bill_participants SET status = CASE WHEN paid_amount >= share_amount THEN 'paid' WHEN paid_amount > 0 THEN 'partial' ELSE 'pending' END WHERE bill_id = ?").bind(id).run();
   }
+}
+
+async function firstClosedAllocatedBillMonth(env, allocations) {
+  const billIds = [...new Set((allocations || []).map((a) => String(a.bill_id || '').trim()).filter(Boolean))];
+  const months = [];
+  for (const id of billIds) {
+    const bill = await env.DB.prepare('SELECT service_month, bill_date FROM bills WHERE id = ?').bind(id).first();
+    if (bill) months.push(billMonth(bill));
+  }
+  return firstClosedMonth(env, months);
 }
 
 function normalizeParticipants(participants, total) {
@@ -337,6 +366,8 @@ async function requireSession(request, env) {
   return { session, user };
 }
 
+function billMonth(bill) { return normalizeMonth(bill?.service_month || bill?.bill_date || today()); }
+function operationMonth(operation) { return normalizeMonth(operation?.service_month || operation?.expense_date || today()); }
 function pathPart(request, index) { return new URL(request.url).pathname.split('/').filter(Boolean)[index]; }
 function normalizeMonth(value) { const raw = String(value || '').slice(0, 7); return /^\d{4}-\d{2}$/.test(raw) ? raw : today().slice(0, 7); }
 async function digest(value) { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join(''); }
