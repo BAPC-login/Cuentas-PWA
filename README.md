@@ -6,7 +6,7 @@ Primera versión de una app moderna para llevar cuentas del hogar entre usuarios
 
 - PWA instalable y usable offline.
 - Interfaz responsive para celular y computador.
-- Usuarios iniciales: Benjamín, María e Iriannys.
+- Usuarios personalizados administrados por el owner.
 - Vista por usuario: la misma cuenta se expresa distinto según quién esté mirando.
   - Ejemplo: si María debe $50.000 a Benjamín, en la vista de Benjamín aparece “María te debe $50.000”.
   - En la vista de María aparece “Le debes a Benjamín $50.000”.
@@ -17,19 +17,18 @@ Primera versión de una app moderna para llevar cuentas del hogar entre usuarios
 - Exportar/importar respaldo JSON.
 - Soporte offline mediante service worker.
 
-## Cómo publicarla en GitHub Pages
+## Publicación en GitHub Pages
 
-El repositorio ya incluye un workflow en `.github/workflows/pages.yml`.
+Este repositorio puede publicarse como sitio estático desde:
 
-Para activarlo:
+- Rama: `main`
+- Carpeta: `/ (root)`
 
-1. Ir a **Settings** del repositorio.
-2. Entrar a **Pages**.
-3. En **Build and deployment**, seleccionar **GitHub Actions**.
-4. Guardar.
-5. Volver a **Actions** y ejecutar o esperar el workflow `Deploy static PWA to GitHub Pages`.
+URL esperada:
 
-Cuando termine, GitHub mostrará el link público o privado según la configuración del repositorio.
+`https://bapc-login.github.io/Cuentas-PWA/`
+
+Último intento de despliegue: 2026-07-01.
 
 ## Limitación actual
 
