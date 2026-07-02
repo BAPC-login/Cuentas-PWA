@@ -1,14 +1,26 @@
 const STORAGE_KEY = 'cuentas-pwa:v1';
 
 const defaultState = {
-  version: 2,
+  version: 3,
   settings: {
     activeMemberId: 'benjamin',
     ownerId: 'benjamin',
     theme: 'dark',
   },
+  session: {
+    userId: 'benjamin',
+    startedAt: new Date().toISOString(),
+  },
   members: [
-    { id: 'benjamin', name: 'Benjamín', role: 'owner', createdAt: new Date().toISOString() },
+    {
+      id: 'benjamin',
+      name: 'Benjamín',
+      email: 'owner@cuentas.local',
+      role: 'owner',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      activatedAt: new Date().toISOString(),
+    },
   ],
   movements: [],
 };
@@ -63,11 +75,41 @@ const elements = {
 init();
 
 function init() {
+  injectSessionControls();
+  injectEmailField();
   elements.dateInput.valueAsDate = new Date();
   document.body.classList.toggle('light', state.settings.theme === 'light');
   bindEvents();
+  ensureValidSession();
   render();
   registerServiceWorker();
+}
+
+function injectSessionControls() {
+  const sidebarCard = document.querySelector('.sidebar-card');
+  if (!sidebarCard || $('#sessionActions')) return;
+  const wrapper = document.createElement('div');
+  wrapper.id = 'sessionActions';
+  wrapper.className = 'button-row session-actions';
+  wrapper.innerHTML = '<button class="ghost-button" id="logoutButton" type="button">Logout</button>';
+  sidebarCard.appendChild(wrapper);
+}
+
+function injectEmailField() {
+  if (!elements.memberForm || $('#memberEmailInput')) return;
+  const emailLabel = document.createElement('label');
+  emailLabel.className = 'field';
+  emailLabel.innerHTML = '<span>Correo del usuario</span><input id="memberEmailInput" type="email" placeholder="usuario@correo.com" autocomplete="off" />';
+  elements.memberForm.insertBefore(emailLabel, elements.memberForm.firstChild);
+
+  const nameLabel = elements.memberNameInput?.closest('.field');
+  if (nameLabel) {
+    nameLabel.querySelector('span').textContent = 'Nombre visible opcional';
+    elements.memberNameInput.placeholder = 'Lo puede completar al ingresar';
+  }
+
+  const submit = elements.memberForm.querySelector('button[type="submit"]');
+  if (submit) submit.textContent = 'Crear invitación';
 }
 
 function bindEvents() {
@@ -79,6 +121,7 @@ function bindEvents() {
     setTimeout(() => elements.amountInput.focus(), 80);
   });
 
+  $('#logoutButton')?.addEventListener('click', logout);
   elements.menuButton.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
   document.addEventListener('click', (event) => {
     if (document.body.classList.contains('sidebar-open') && !event.target.closest('.sidebar') && !event.target.closest('.menu-button')) {
@@ -153,27 +196,34 @@ function loadState() {
 
 function migrateState(rawState) {
   const createdAt = new Date().toISOString();
-  const members = Array.isArray(rawState.members) && rawState.members.length ? rawState.members : defaultState.members;
-  const normalizedMembers = members.map((member, index) => ({
-    id: member.id || slugifyFromList(member.name || `Usuario ${index + 1}`, members),
-    name: member.name || `Usuario ${index + 1}`,
+  const rawMembers = Array.isArray(rawState.members) && rawState.members.length ? rawState.members : defaultState.members;
+  const normalizedMembers = rawMembers.map((member, index) => ({
+    id: member.id || slugifyFromList(member.name || member.email || `usuario-${index + 1}`, rawMembers),
+    name: member.name || '',
+    email: normalizeEmail(member.email || (index === 0 ? 'owner@cuentas.local' : `${member.id || `usuario${index + 1}`}@pendiente.local`)),
     role: member.role || (index === 0 ? 'owner' : 'member'),
+    status: member.status || 'active',
     createdAt: member.createdAt || createdAt,
+    activatedAt: member.activatedAt || (member.name ? createdAt : null),
+    revokedAt: member.revokedAt || null,
   }));
 
   const owner = normalizedMembers.find((member) => member.role === 'owner') || normalizedMembers[0];
   owner.role = 'owner';
+  owner.status = 'active';
+  if (!owner.name) owner.name = 'Benjamín';
 
   return {
     ...structuredClone(defaultState),
     ...rawState,
-    version: 2,
+    version: 3,
     settings: {
       ...defaultState.settings,
       ...(rawState.settings || {}),
       ownerId: rawState.settings?.ownerId || owner.id,
       activeMemberId: rawState.settings?.activeMemberId || owner.id,
     },
+    session: rawState.session || { userId: owner.id, startedAt: createdAt },
     members: normalizedMembers,
     movements: Array.isArray(rawState.movements) ? rawState.movements : [],
   };
@@ -182,6 +232,25 @@ function migrateState(rawState) {
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   updateBackupPreview();
+}
+
+function ensureValidSession() {
+  const sessionUser = getSessionUser();
+  if (!sessionUser || sessionUser.status === 'revoked') {
+    state.session = { userId: state.settings.ownerId, startedAt: new Date().toISOString() };
+  }
+  const active = getSessionUser();
+  if (!isOwnerSession()) state.settings.activeMemberId = active?.id;
+  saveState();
+}
+
+function logout() {
+  const owner = state.members.find((member) => member.id === state.settings.ownerId);
+  state.session = { userId: owner?.id || state.members[0]?.id, startedAt: new Date().toISOString() };
+  state.settings.activeMemberId = state.session.userId;
+  saveState();
+  render();
+  showToast('Sesión cerrada. En demo vuelve al owner.');
 }
 
 function setView(view) {
@@ -196,6 +265,7 @@ function setView(view) {
 
 function render() {
   normalizeActiveMember();
+  renderSession();
   renderSelects();
   renderDashboard();
   renderMovements();
@@ -204,22 +274,41 @@ function render() {
 }
 
 function normalizeActiveMember() {
-  const exists = state.members.some((member) => member.id === state.settings.activeMemberId);
-  if (!exists) state.settings.activeMemberId = state.settings.ownerId || state.members[0]?.id || null;
+  const exists = state.members.some((member) => member.id === state.settings.activeMemberId && member.status !== 'revoked');
+  if (!exists) state.settings.activeMemberId = getSessionUser()?.id || state.settings.ownerId || state.members[0]?.id || null;
+  if (!isOwnerSession()) state.settings.activeMemberId = getSessionUser()?.id;
+}
+
+function isOwnerSession() {
+  return state.session?.userId === state.settings.ownerId;
 }
 
 function isOwnerView() {
-  return state.settings.activeMemberId === state.settings.ownerId;
+  return isOwnerSession();
+}
+
+function renderSession() {
+  const sessionUser = getSessionUser();
+  const sessionName = $('#sessionName');
+  const sessionEmail = $('#sessionEmail');
+  const sessionHelpText = $('#sessionHelpText');
+  if (sessionName) sessionName.textContent = sessionUser?.name || 'Usuario pendiente';
+  if (sessionEmail) sessionEmail.textContent = sessionUser?.email || 'sin correo';
+  if (sessionHelpText) sessionHelpText.textContent = isOwnerSession()
+    ? 'Sesión owner abierta. Puedes cambiar la vista y administrar usuarios.'
+    : 'Tu sesión queda abierta hasta logout o revocación.';
 }
 
 function renderSelects() {
-  const options = state.members.map((member) => `<option value="${member.id}">${escapeHtml(member.name)}${member.role === 'owner' ? ' · owner' : ''}</option>`).join('');
+  const visibleMembers = state.members.filter((member) => member.status !== 'revoked');
+  const options = visibleMembers.map((member) => `<option value="${member.id}">${escapeHtml(displayName(member))}${member.role === 'owner' ? ' · owner' : ''}</option>`).join('');
   elements.activeMemberSelect.innerHTML = options;
   elements.debtorSelect.innerHTML = options;
   elements.creditorSelect.innerHTML = options;
   elements.activeMemberSelect.value = state.settings.activeMemberId;
+  elements.activeMemberSelect.disabled = !isOwnerSession();
   elements.debtorSelect.value = state.settings.activeMemberId;
-  const firstOther = state.members.find((member) => member.id !== state.settings.activeMemberId) || state.members[0];
+  const firstOther = visibleMembers.find((member) => member.id !== state.settings.activeMemberId) || visibleMembers[0];
   elements.creditorSelect.value = firstOther?.id || '';
 }
 
@@ -233,16 +322,15 @@ function renderDashboard() {
   elements.netBalance.textContent = formatCurrency(Math.abs(net));
   elements.netBalance.className = net >= 0 ? 'amount-positive' : 'amount-negative';
   elements.balanceHint.textContent = net > 0
-    ? `A ${active.name} le deben más de lo que debe.`
+    ? `A ${displayName(active)} le deben más de lo que debe.`
     : net < 0
-      ? `${active.name} debe más de lo que le deben.`
+      ? `${displayName(active)} debe más de lo que le deben.`
       : 'Cuentas equilibradas para esta vista.';
 
-  elements.activePerspectiveTitle.textContent = `Vista de ${active?.name || 'usuario'}`;
+  elements.activePerspectiveTitle.textContent = `Vista de ${displayName(active)}`;
   elements.owedToMe.textContent = formatCurrency(owedToMe);
   elements.iOwe.textContent = formatCurrency(iOwe);
   elements.receiptCount.textContent = String(state.movements.filter((movement) => movement.receipt?.dataUrl).length);
-
   renderRelationships();
   renderRecentMovements();
 }
@@ -250,7 +338,7 @@ function renderDashboard() {
 function renderRelationships() {
   const active = getActiveMember();
   const rows = state.members
-    .filter((member) => member.id !== active?.id)
+    .filter((member) => member.id !== active?.id && member.status !== 'revoked')
     .map((member) => {
       const owesMe = sumOpen((movement) => movement.debtorId === member.id && movement.creditorId === active.id);
       const iOwe = sumOpen((movement) => movement.debtorId === active.id && movement.creditorId === member.id);
@@ -265,15 +353,8 @@ function renderRelationships() {
   }
 
   elements.relationshipList.innerHTML = rows.map((row) => {
-    const text = row.net >= 0 ? `${row.member.name} te debe` : `Le debes a ${row.member.name}`;
-    return `
-      <div class="relationship-card">
-        <div>
-          <strong>${escapeHtml(text)}</strong>
-          <span class="muted small">${row.owesMe ? `${row.member.name} → ${active.name}: ${formatCurrency(row.owesMe)}` : ''}${row.owesMe && row.iOwe ? ' · ' : ''}${row.iOwe ? `${active.name} → ${row.member.name}: ${formatCurrency(row.iOwe)}` : ''}</span>
-        </div>
-        <strong class="${row.net >= 0 ? 'amount-positive' : 'amount-negative'}">${formatCurrency(Math.abs(row.net))}</strong>
-      </div>`;
+    const text = row.net >= 0 ? `${displayName(row.member)} te debe` : `Le debes a ${displayName(row.member)}`;
+    return `<div class="relationship-card"><div><strong>${escapeHtml(text)}</strong><span class="muted small">${row.owesMe ? `${displayName(row.member)} → ${displayName(active)}: ${formatCurrency(row.owesMe)}` : ''}${row.owesMe && row.iOwe ? ' · ' : ''}${row.iOwe ? `${displayName(active)} → ${displayName(row.member)}: ${formatCurrency(row.iOwe)}` : ''}</span></div><strong class="${row.net >= 0 ? 'amount-positive' : 'amount-negative'}">${formatCurrency(Math.abs(row.net))}</strong></div>`;
   }).join('');
 }
 
@@ -298,26 +379,7 @@ function renderMovementCard(movement) {
   const debtor = getMemberName(movement.debtorId);
   const creditor = getMemberName(movement.creditorId);
   const title = movement.debtorId === active?.id ? `Le debes a ${creditor}` : movement.creditorId === active?.id ? `${debtor} te debe` : `${debtor} le debe a ${creditor}`;
-  return `
-    <article class="movement-card" data-id="${movement.id}">
-      <div class="movement-main">
-        <div>
-          <p class="movement-title">${escapeHtml(title)}</p>
-          <div class="movement-meta">
-            <span>${formatDate(movement.date)}</span>
-            <span>${escapeHtml(movement.note || 'Sin detalle')}</span>
-            ${movement.receipt?.dataUrl ? '<span>Con comprobante</span>' : ''}
-          </div>
-        </div>
-        <strong class="${movement.status === 'settled' ? 'amount-positive' : 'amount-negative'}">${formatCurrency(movement.amount)}</strong>
-      </div>
-      <div class="movement-actions">
-        <span class="badge ${movement.status === 'settled' ? 'settled' : 'open'}">${movement.status === 'settled' ? 'Pagada' : 'Pendiente'}</span>
-        <button class="tiny-button" data-action="toggle-status" type="button">${movement.status === 'settled' ? 'Marcar pendiente' : 'Marcar pagada'}</button>
-        ${movement.receipt?.dataUrl ? '<button class="tiny-button" data-action="view-receipt" type="button">Ver comprobante</button>' : ''}
-        <button class="tiny-button" data-action="delete" type="button">Eliminar</button>
-      </div>
-    </article>`;
+  return `<article class="movement-card" data-id="${movement.id}"><div class="movement-main"><div><p class="movement-title">${escapeHtml(title)}</p><div class="movement-meta"><span>${formatDate(movement.date)}</span><span>${escapeHtml(movement.note || 'Sin detalle')}</span>${movement.receipt?.dataUrl ? '<span>Con comprobante</span>' : ''}</div></div><strong class="${movement.status === 'settled' ? 'amount-positive' : 'amount-negative'}">${formatCurrency(movement.amount)}</strong></div><div class="movement-actions"><span class="badge ${movement.status === 'settled' ? 'settled' : 'open'}">${movement.status === 'settled' ? 'Pagada' : 'Pendiente'}</span><button class="tiny-button" data-action="toggle-status" type="button">${movement.status === 'settled' ? 'Marcar pendiente' : 'Marcar pagada'}</button>${movement.receipt?.dataUrl ? '<button class="tiny-button" data-action="view-receipt" type="button">Ver comprobante</button>' : ''}<button class="tiny-button" data-action="delete" type="button">Eliminar</button></div></article>`;
 }
 
 function renderMembers() {
@@ -325,30 +387,19 @@ function renderMembers() {
   elements.ownerStatusBadge.textContent = ownerMode ? 'Owner activo' : 'Vista usuario';
   elements.ownerStatusBadge.className = `badge ${ownerMode ? 'settled' : 'open'}`;
   elements.ownerHelpText.textContent = ownerMode
-    ? 'Puedes crear usuarios personalizados y eliminar usuarios que ya no participen.'
-    : `Estás mirando como ${getActiveMember()?.name}. Cambia a la vista owner para administrar usuarios.`;
+    ? 'Crea usuarios por correo. La cuenta queda pendiente hasta que el usuario complete su nombre.'
+    : `Estás mirando como ${displayName(getSessionUser())}. Solo el owner administra usuarios.`;
   elements.memberForm.style.display = ownerMode ? 'grid' : 'none';
 
   elements.memberList.innerHTML = state.members.map((member) => {
     const isActive = member.id === state.settings.activeMemberId;
     const isOwner = member.id === state.settings.ownerId;
     const movementCount = state.movements.filter((movement) => movement.debtorId === member.id || movement.creditorId === member.id).length;
-    const canDelete = ownerMode && !isOwner && state.members.length > 1;
-    return `
-      <article class="member-card" data-id="${member.id}">
-        <div class="member-info">
-          <div class="avatar">${getInitials(member.name)}</div>
-          <div>
-            <strong>${escapeHtml(member.name)}</strong>
-            <div class="movement-meta">
-              <span>${isOwner ? 'Owner' : roleLabel(member.role)}</span>
-              <span>${isActive ? 'Vista activa' : 'Usuario disponible'}</span>
-              <span>${movementCount} movimientos</span>
-            </div>
-          </div>
-        </div>
-        <button class="tiny-button" data-action="delete-member" ${canDelete ? '' : 'disabled'} type="button">${isOwner ? 'Protegido' : 'Eliminar'}</button>
-      </article>`;
+    const statusClass = member.status === 'revoked' ? 'revoked' : member.status === 'pending' ? 'pending' : 'settled';
+    const canRevoke = ownerMode && !isOwner && member.status !== 'revoked';
+    const canReactivate = ownerMode && !isOwner && member.status === 'revoked';
+    const canDelete = ownerMode && !isOwner;
+    return `<article class="member-card ${escapeHtml(member.status)}" data-id="${member.id}"><div class="member-info"><div class="avatar">${getInitials(displayName(member))}</div><div><strong>${escapeHtml(displayName(member))}</strong><div class="movement-meta"><span>${escapeHtml(member.email)}</span><span>${roleLabel(member.role)}</span><span>${isActive ? 'Vista activa' : statusLabel(member.status)}</span><span>${movementCount} movimientos</span></div></div></div><div class="movement-actions"><span class="badge ${statusClass}">${statusLabel(member.status)}</span>${canRevoke ? '<button class="tiny-button" data-action="revoke-member" type="button">Revocar</button>' : ''}${canReactivate ? '<button class="tiny-button" data-action="reactivate-member" type="button">Reactivar</button>' : ''}<button class="tiny-button" data-action="delete-member" ${canDelete ? '' : 'disabled'} type="button">${isOwner ? 'Protegido' : 'Eliminar'}</button></div></article>`;
   }).join('');
 }
 
@@ -360,7 +411,6 @@ function addMovement() {
   const note = elements.noteInput.value.trim();
   if (!debtorId || !creditorId || debtorId === creditorId) return showToast('Elige dos usuarios distintos.');
   if (!amount || amount <= 0) return showToast('Ingresa un monto válido.');
-
   state.movements.push({ id: crypto.randomUUID(), debtorId, creditorId, amount, date, note, status: 'open', receipt: pendingReceipt, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   pendingReceipt = null;
   elements.receiptInput.value = '';
@@ -373,16 +423,18 @@ function addMovement() {
 
 function addMember() {
   if (!isOwnerView()) return showToast('Solo el owner puede crear usuarios.');
+  const emailInput = $('#memberEmailInput');
+  const email = normalizeEmail(emailInput?.value || '');
   const name = elements.memberNameInput.value.trim();
   const role = elements.memberRoleSelect?.value || 'member';
-  if (name.length < 2) return showToast('Escribe un nombre válido.');
-  if (state.members.some((member) => member.name.toLowerCase() === name.toLowerCase())) return showToast('Ese usuario ya existe.');
-
-  state.members.push({ id: slugify(name), name, role, createdAt: new Date().toISOString() });
+  if (!isValidEmail(email)) return showToast('Ingresa un correo válido.');
+  if (state.members.some((member) => member.email === email)) return showToast('Ese correo ya existe.');
+  state.members.push({ id: slugify(email.split('@')[0]), email, name, role, status: name ? 'active' : 'pending', createdAt: new Date().toISOString(), activatedAt: name ? new Date().toISOString() : null, revokedAt: null });
+  if (emailInput) emailInput.value = '';
   elements.memberNameInput.value = '';
   saveState();
   render();
-  showToast('Usuario creado.');
+  showToast('Usuario creado. En la próxima etapa recibirá acceso por correo.');
 }
 
 function handleMovementAction(event) {
@@ -391,7 +443,6 @@ function handleMovementAction(event) {
   const card = button.closest('.movement-card');
   const movement = state.movements.find((item) => item.id === card.dataset.id);
   if (!movement) return;
-
   if (button.dataset.action === 'toggle-status') {
     movement.status = movement.status === 'settled' ? 'open' : 'settled';
     movement.updatedAt = new Date().toISOString();
@@ -412,23 +463,44 @@ function handleMovementAction(event) {
 }
 
 function handleMemberAction(event) {
-  const button = event.target.closest('button[data-action="delete-member"]');
-  if (!button) return;
-  if (!isOwnerView()) return showToast('Solo el owner puede eliminar usuarios.');
+  const button = event.target.closest('button[data-action]');
+  if (!button || !button.closest('.member-card')) return;
+  if (!isOwnerView()) return showToast('Solo el owner puede administrar usuarios.');
   const card = button.closest('.member-card');
   const member = state.members.find((item) => item.id === card.dataset.id);
   if (!member) return;
-  if (member.id === state.settings.ownerId) return showToast('El owner no se puede eliminar.');
+  if (member.id === state.settings.ownerId) return showToast('El owner no se puede modificar desde aquí.');
 
-  const hasMovements = state.movements.some((movement) => movement.debtorId === member.id || movement.creditorId === member.id);
-  const message = hasMovements ? `Eliminar a ${member.name} también borrará sus movimientos. ¿Continuar?` : `¿Eliminar a ${member.name}?`;
-  if (!confirm(message)) return;
-  state.members = state.members.filter((item) => item.id !== member.id);
-  state.movements = state.movements.filter((movement) => movement.debtorId !== member.id && movement.creditorId !== member.id);
-  normalizeActiveMember();
-  saveState();
-  render();
-  showToast('Usuario eliminado.');
+  if (button.dataset.action === 'revoke-member') {
+    member.status = 'revoked';
+    member.revokedAt = new Date().toISOString();
+    if (state.session?.userId === member.id) state.session = { userId: state.settings.ownerId, startedAt: new Date().toISOString() };
+    saveState();
+    render();
+    showToast('Acceso revocado.');
+    return;
+  }
+
+  if (button.dataset.action === 'reactivate-member') {
+    member.status = member.name ? 'active' : 'pending';
+    member.revokedAt = null;
+    saveState();
+    render();
+    showToast('Usuario reactivado.');
+    return;
+  }
+
+  if (button.dataset.action === 'delete-member') {
+    const hasMovements = state.movements.some((movement) => movement.debtorId === member.id || movement.creditorId === member.id);
+    const message = hasMovements ? `Eliminar a ${displayName(member)} también borrará sus movimientos. ¿Continuar?` : `¿Eliminar a ${displayName(member)}?`;
+    if (!confirm(message)) return;
+    state.members = state.members.filter((item) => item.id !== member.id);
+    state.movements = state.movements.filter((movement) => movement.debtorId !== member.id && movement.creditorId !== member.id);
+    normalizeActiveMember();
+    saveState();
+    render();
+    showToast('Usuario eliminado.');
+  }
 }
 
 function exportData() {
@@ -477,17 +549,40 @@ function sumOpen(predicate) {
   return state.movements.filter((movement) => movement.status !== 'settled').filter(predicate).reduce((sum, movement) => sum + movement.amount, 0);
 }
 
+function getSessionUser() {
+  return state.members.find((member) => member.id === state.session?.userId);
+}
+
 function getActiveMember() {
-  return state.members.find((member) => member.id === state.settings.activeMemberId) || state.members[0];
+  return state.members.find((member) => member.id === state.settings.activeMemberId) || getSessionUser() || state.members[0];
 }
 
 function getMemberName(id) {
-  return state.members.find((member) => member.id === id)?.name || 'Usuario eliminado';
+  const member = state.members.find((item) => item.id === id);
+  return member ? displayName(member) : 'Usuario eliminado';
+}
+
+function displayName(member) {
+  if (!member) return 'Usuario';
+  return member.name || member.email || 'Usuario pendiente';
 }
 
 function roleLabel(role) {
   const labels = { owner: 'Owner', member: 'Usuario', viewer: 'Solo lectura' };
   return labels[role] || 'Usuario';
+}
+
+function statusLabel(status) {
+  const labels = { active: 'Activo', pending: 'Pendiente', revoked: 'Revocado' };
+  return labels[status] || 'Activo';
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function formatCurrency(value) {
@@ -505,7 +600,7 @@ function parseAmount(value) {
 }
 
 function getInitials(name) {
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
+  return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'U';
 }
 
 function slugify(value) {
