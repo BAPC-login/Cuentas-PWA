@@ -14,7 +14,7 @@ export async function createCategory(request, env) {
   if (name.length < 2) return json({ error: 'invalid_name', message: 'Nombre de categoria invalido.' }, env, 400);
   const id = 'cat-' + crypto.randomUUID();
   await env.DB.prepare('INSERT INTO categories (id, name, kind, color, icon) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, name, body.kind || 'expense', body.color || null, body.icon || null)
+    .bind(id, name, body.kind || 'expense', body.color || '#38bdf8', body.icon || '🏷️')
     .run();
   return json({ ok: true, category: await getCategory(env, id) }, env, 201);
 }
@@ -28,8 +28,8 @@ export async function listBills(request, env) {
   let sql = `SELECT b.*, c.name AS category_name, c.icon AS category_icon FROM bills b JOIN categories c ON c.id = b.category_id WHERE 1=1`;
   const binds = [];
   if (status) { sql += ' AND b.status = ?'; binds.push(status); }
-  if (month) { sql += ' AND substr(b.bill_date,1,7) = ?'; binds.push(month); }
-  sql += ' ORDER BY b.bill_date DESC, b.created_at DESC LIMIT 200';
+  if (month) { sql += ' AND COALESCE(b.service_month, substr(b.bill_date,1,7)) = ?'; binds.push(month); }
+  sql += ' ORDER BY COALESCE(b.service_month, substr(b.bill_date,1,7)) DESC, b.bill_date DESC, b.created_at DESC LIMIT 200';
   const { results } = await env.DB.prepare(sql).bind(...binds).all();
   return json({ bills: results }, env);
 }
@@ -48,14 +48,15 @@ async function createBillRecord(env, user, body) {
   const categoryId = String(body.category_id || '').trim();
   const total = toInt(body.total_amount);
   const billDate = String(body.bill_date || today()).slice(0, 10);
+  const serviceMonth = normalizeMonth(body.service_month || billDate.slice(0, 7));
   const participants = Array.isArray(body.participants) ? body.participants : [];
   if (!title || !categoryId || total <= 0) return { error: 'invalid_bill', message: 'Faltan datos de la cuenta.', status: 400 };
   if (!participants.length) return { error: 'participants_required', message: 'Selecciona al menos un participante.', status: 400 };
   const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
   if (shareSum !== total) return { error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.', status: 400 };
   const billId = 'bill-' + crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO bills (id, category_id, title, description, total_amount, bill_date, due_date, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(billId, categoryId, title, body.description || null, total, billDate, body.due_date || null, body.status || 'open', user.id)
+  await env.DB.prepare('INSERT INTO bills (id, category_id, title, description, total_amount, bill_date, due_date, service_month, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(billId, categoryId, title, body.description || null, total, billDate, body.due_date || null, serviceMonth, body.status || 'open', user.id)
     .run();
   for (const p of participants) {
     const userId = String(p.user_id || '').trim();
@@ -123,8 +124,10 @@ export async function createReceipt(request, env) {
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
   const body = await readJson(request);
   const id = 'rec-' + crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO receipts (id, uploaded_by, source, status, file_name, file_type, raw_text, detected_amount, detected_date, detected_sender, detected_receiver, detected_category, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, auth.user.id, body.source || 'manual_upload', 'pending_review', body.file_name || null, body.file_type || null, body.raw_text || null, toInt(body.detected_amount) || null, body.detected_date || null, body.detected_sender || null, body.detected_receiver || null, body.detected_category || null, body.confidence || null)
+  const detectedDate = body.detected_date || today();
+  const serviceMonth = normalizeMonth(body.service_month || String(detectedDate).slice(0, 7));
+  await env.DB.prepare('INSERT INTO receipts (id, uploaded_by, source, status, file_name, file_type, raw_text, detected_amount, detected_date, service_month, detected_sender, detected_receiver, detected_category, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, auth.user.id, body.source || 'manual_upload', 'pending_review', body.file_name || null, body.file_type || null, body.raw_text || null, toInt(body.detected_amount) || null, detectedDate || null, serviceMonth, body.detected_sender || null, body.detected_receiver || null, body.detected_category || null, body.confidence || null)
     .run();
   return json({ ok: true, receipt: await getReceipt(env, id) }, env, 201);
 }
@@ -149,18 +152,20 @@ export async function approveReceipt(request, env) {
   const receipt = await getReceipt(env, receiptId);
   if (!receipt) return json({ error: 'receipt_not_found', message: 'Comprobante no encontrado.' }, env, 404);
   const body = await readJson(request);
+  const amount = body.total_amount || receipt.detected_amount;
   const billBody = {
     category_id: body.category_id,
     title: body.title || receipt.file_name || 'Comprobante aprobado',
     description: body.description || receipt.raw_text || null,
-    total_amount: body.total_amount || receipt.detected_amount,
+    total_amount: amount,
     bill_date: body.bill_date || receipt.detected_date || today(),
-    participants: body.participants || [{ user_id: auth.user.id, share_amount: body.total_amount || receipt.detected_amount }],
+    service_month: body.service_month || receipt.service_month || String(receipt.detected_date || today()).slice(0, 7),
+    participants: body.participants || [{ user_id: auth.user.id, share_amount: amount }],
   };
   const result = await createBillRecord(env, auth.user, billBody);
   if (result.error) return json(result, env, result.status || 400);
-  await env.DB.prepare('UPDATE receipts SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
-    .bind('approved', auth.user.id, new Date().toISOString(), receiptId)
+  await env.DB.prepare('UPDATE receipts SET status = ?, reviewed_by = ?, reviewed_at = ?, service_month = ? WHERE id = ?')
+    .bind('approved', auth.user.id, new Date().toISOString(), billBody.service_month, receiptId)
     .run();
   return json({ ok: true, receipt: await getReceipt(env, receiptId), bill: result.bill }, env);
 }
@@ -180,10 +185,10 @@ export async function rejectReceipt(request, env) {
 export async function dashboard(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
-  const monthly = await env.DB.prepare(`SELECT substr(bill_date,1,7) AS month, SUM(total_amount) AS total FROM bills WHERE status != 'cancelled' GROUP BY month ORDER BY month`).all();
+  const monthly = await env.DB.prepare(`SELECT COALESCE(service_month, substr(bill_date,1,7)) AS month, SUM(total_amount) AS total FROM bills WHERE status != 'cancelled' GROUP BY month ORDER BY month`).all();
   const byCategory = await env.DB.prepare(`SELECT c.name, c.icon, SUM(b.total_amount) AS total FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.status != 'cancelled' GROUP BY c.id, c.name, c.icon ORDER BY total DESC`).all();
   const pendingByUser = await env.DB.prepare(`SELECT u.id, u.name, u.email, SUM(bp.share_amount - bp.paid_amount) AS pending FROM bill_participants bp JOIN users u ON u.id = bp.user_id WHERE bp.status != 'paid' GROUP BY u.id, u.name, u.email HAVING pending > 0 ORDER BY pending DESC`).all();
-  const curves = await env.DB.prepare(`SELECT substr(b.bill_date,1,7) AS month, c.name AS category, SUM(b.total_amount) AS total FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.status != 'cancelled' GROUP BY month, c.name ORDER BY month, c.name`).all();
+  const curves = await env.DB.prepare(`SELECT COALESCE(b.service_month, substr(b.bill_date,1,7)) AS month, c.name AS category, SUM(b.total_amount) AS total FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.status != 'cancelled' GROUP BY month, c.name ORDER BY month, c.name`).all();
   return json({ monthly: monthly.results, by_category: byCategory.results, pending_by_user: pendingByUser.results, curves: curves.results }, env);
 }
 
@@ -215,6 +220,7 @@ async function requireSession(request, env) {
 }
 
 function pathPart(request, index) { return new URL(request.url).pathname.split('/').filter(Boolean)[index]; }
+function normalizeMonth(value) { const raw = String(value || '').slice(0, 7); return /^\d{4}-\d{2}$/.test(raw) ? raw : today().slice(0, 7); }
 async function digest(value) { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join(''); }
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
 function toInt(value) { return Math.max(0, Math.round(Number(String(value || 0).replace(/[^0-9.-]/g, '')) || 0)); }
