@@ -2,14 +2,16 @@
 
 Primera versión de una app moderna para llevar cuentas del hogar entre usuarios.
 
+## Frontend publicado
+
+`https://bapc-login.github.io/Cuentas-PWA/`
+
 ## Qué incluye esta versión
 
 - PWA instalable y usable offline.
 - Interfaz responsive para celular y computador.
 - Usuarios personalizados administrados por el owner.
 - Vista por usuario: la misma cuenta se expresa distinto según quién esté mirando.
-  - Ejemplo: si María debe $50.000 a Benjamín, en la vista de Benjamín aparece “María te debe $50.000”.
-  - En la vista de María aparece “Le debes a Benjamín $50.000”.
 - Registro de movimientos con deudor, acreedor, monto, fecha y detalle.
 - Adjuntar comprobante de pago como imagen comprimida.
 - Marcar movimientos como pendientes o pagados.
@@ -17,27 +19,35 @@ Primera versión de una app moderna para llevar cuentas del hogar entre usuarios
 - Exportar/importar respaldo JSON.
 - Soporte offline mediante service worker.
 
-## Publicación en GitHub Pages
+## Backend preparado
 
-Este repositorio puede publicarse como sitio estático desde:
+Se agregó una base de API con Cloudflare Workers y D1 en `backend/src/index.js`.
 
-- Rama: `main`
-- Carpeta: `/ (root)`
+Endpoints incluidos:
 
-URL esperada:
+- `GET /health`
+- `POST /auth/request-code`
+- `POST /auth/verify-code`
+- `POST /auth/logout`
+- `GET /me`
+- `GET /owner/users`
+- `POST /owner/users`
+- `PATCH /owner/users/:id/revoke`
+- `PATCH /owner/users/:id/reactivate`
 
-`https://bapc-login.github.io/Cuentas-PWA/`
+La sesión queda persistente hasta logout o revocación del owner.
 
-Último intento de despliegue: 2026-07-01.
+## Cómo desplegar backend después
 
-## Limitación actual
+1. Crear D1 en Cloudflare.
+2. Copiar `wrangler.toml.example` como `wrangler.toml`.
+3. Pegar el `database_id` real.
+4. Ejecutar migraciones con Wrangler.
+5. Desplegar el Worker.
+6. Conectar el frontend a la URL del Worker.
 
-Esta versión guarda datos en el navegador con `localStorage`. Sirve para probar la experiencia, instalar la PWA y usarla sin servidor, pero todavía no sincroniza datos entre celulares.
+## Pendiente
 
-## Próxima etapa recomendada
-
-Conectar una base compartida para que todos los usuarios vean la misma información:
-
-- Opción simple: Google Sheets como base temporal.
-- Opción más robusta: Supabase o Firebase.
-- Después: lectura automática de comprobantes con OCR/IA.
+- Enviar códigos por correo real con Resend u otro proveedor.
+- Mover movimientos y comprobantes desde localStorage a D1.
+- Conectar la UI de login al backend real.
