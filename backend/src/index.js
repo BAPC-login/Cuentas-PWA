@@ -1,4 +1,4 @@
-import { listCategories, createCategory, listBills, createBill, updateBillStatus, listPayments, createPayment, listReceipts, createReceipt, approveReceipt, rejectReceipt, dashboard } from './family.js';
+import { listCategories, createCategory, listBills, getBillDetails, createBill, updateBillParticipants, updateBillStatus, listPayments, createPayment, listReceipts, createReceipt, approveReceipt, rejectReceipt, listDebts, dashboard, listOperations, getOperationDetails, createOperation, updateOperation } from './family.js';
 
 export default {
   async fetch(request, env) {
@@ -20,7 +20,14 @@ export default {
       if (url.pathname === '/categories' && request.method === 'POST') return createCategory(request, env);
       if (url.pathname === '/bills' && request.method === 'GET') return listBills(request, env);
       if (url.pathname === '/bills' && request.method === 'POST') return createBill(request, env);
+      if (url.pathname.match(/^\/bills\/[^/]+$/) && request.method === 'GET') return getBillDetails(request, env);
+      if (url.pathname.match(/^\/bills\/[^/]+$/) && request.method === 'PATCH') return updateBillParticipants(request, env);
       if (url.pathname.match(/^\/bills\/[^/]+\/status$/) && request.method === 'PATCH') return updateBillStatus(request, env);
+      if (url.pathname === '/debts' && request.method === 'GET') return listDebts(request, env);
+      if (url.pathname === '/operations' && request.method === 'GET') return listOperations(request, env);
+      if (url.pathname === '/operations' && request.method === 'POST') return createOperation(request, env);
+      if (url.pathname.match(/^\/operations\/[^/]+$/) && request.method === 'GET') return getOperationDetails(request, env);
+      if (url.pathname.match(/^\/operations\/[^/]+$/) && request.method === 'PATCH') return updateOperation(request, env);
       if (url.pathname === '/payments' && request.method === 'GET') return listPayments(request, env);
       if (url.pathname === '/payments' && request.method === 'POST') return createPayment(request, env);
       if (url.pathname === '/receipts' && request.method === 'GET') return listReceipts(request, env);
