@@ -7,10 +7,13 @@ import './monthly-report.js';
 import './expense-entry.js';
 import './pro-tools-ui.js';
 import './auto-rules.js';
+import './rules-manager.js';
 import './bill-edit-stable.js';
+import './professional-ledger.js';
 
 const API_BASE_FAMILY = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const SESSION_TOKEN_KEY_FAMILY = 'cuentas-pwa:session-token';
+const MONTH_KEY_FAMILY = 'cuentas-pwa:selected-month';
 
 setTimeout(initFamilyLite, 1200);
 
@@ -22,7 +25,7 @@ function initFamilyLite() {
       <div class="panel-header"><div><p class="eyebrow">Datos reales D1</p><h3>Dashboard familiar</h3></div><button class="text-button" id="familyLiteReload" type="button">Actualizar</button></div>
       <div class="summary-grid">
         <div class="summary-card"><span>Total histórico</span><strong id="familyLiteTotal">$0</strong></div>
-        <div class="summary-card"><span>Mes actual</span><strong id="familyLiteMonth">$0</strong></div>
+        <div class="summary-card"><span>Mes seleccionado</span><strong id="familyLiteMonth">$0</strong></div>
         <div class="summary-card wide"><span>Comprobantes pendientes</span><strong id="familyLitePending">0</strong></div>
       </div>
       <div class="movement-list" id="familyLiteRows"></div>
@@ -36,6 +39,7 @@ function initFamilyLite() {
 async function loadFamilyLite() {
   const token = localStorage.getItem(SESSION_TOKEN_KEY_FAMILY);
   if (!token) return;
+  const monthKey = localStorage.getItem(MONTH_KEY_FAMILY) || new Date().toISOString().slice(0, 7);
   const headers = { authorization: `Bearer ${token}` };
   const [dash, receipts] = await Promise.all([
     fetch(API_BASE_FAMILY + '/dashboard', { headers }).then(r => r.json()),
@@ -43,9 +47,9 @@ async function loadFamilyLite() {
   ]);
   const monthly = dash.monthly || [];
   const total = monthly.reduce((s, r) => s + Number(r.total || 0), 0);
-  const month = Number(monthly[monthly.length - 1]?.total || 0);
+  const monthTotal = Number(monthly.find((r) => r.month === monthKey)?.total || 0);
   document.querySelector('#familyLiteTotal').textContent = money(total);
-  document.querySelector('#familyLiteMonth').textContent = money(month);
+  document.querySelector('#familyLiteMonth').textContent = money(monthTotal);
   document.querySelector('#familyLitePending').textContent = String((receipts.receipts || []).filter(r => r.status === 'pending_review').length);
   const rows = (dash.by_category || []).map(r => `<article class="movement-card"><div class="movement-main"><div><p class="movement-title">${escapeHtml(r.icon || '')} ${escapeHtml(r.name)}</p><div class="movement-meta"><span>Histórico por categoría</span></div></div><strong>${money(r.total)}</strong></div></article>`).join('');
   document.querySelector('#familyLiteRows').innerHTML = rows || '<div class="empty-state">Aún no hay datos históricos.</div>';
