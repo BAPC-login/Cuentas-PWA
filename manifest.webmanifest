@@ -2,13 +2,45 @@
   "name": "Cuentas Hogar",
   "short_name": "Cuentas",
   "description": "App moderna para llevar cuentas del hogar, deudas entre usuarios y comprobantes.",
-  "start_url": "./",
+  "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#07111f",
   "theme_color": "#0f172a",
   "categories": ["finance", "productivity", "utilities"],
+  "share_target": {
+    "action": "./?share=receipt",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "receipt",
+          "accept": ["image/*", "application/pdf"]
+        }
+      ]
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "Subir comprobante",
+      "short_name": "Comprobante",
+      "description": "Abrir la app para registrar un comprobante rápido.",
+      "url": "./?share=receipt",
+      "icons": [{ "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Registrar cuenta",
+      "short_name": "Cuenta",
+      "description": "Crear una cuenta familiar.",
+      "url": "./?view=movements",
+      "icons": [{ "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ],
   "icons": [
     {
       "src": "./assets/icon.svg",
