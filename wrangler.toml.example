@@ -7,8 +7,15 @@ APP_ORIGIN = "https://bapc-login.github.io"
 OWNER_EMAIL = "owner@cuentas.local"
 SESSION_DAYS = "3650"
 CODE_TTL_MINUTES = "10"
+# Opcional si usas Resend con dominio/remitente propio:
+# RESEND_FROM = "Cuentas Hogar <no-reply@tudominio.cl>"
+
+# EMAIL_RELAY_URL y EMAIL_RELAY_SECRET deben guardarse como secrets, no como texto plano:
+# npx wrangler secret put EMAIL_RELAY_URL
+# npx wrangler secret put EMAIL_RELAY_SECRET
 
 [[d1_databases]]
 binding = "DB"
 database_name = "cuentas-pwa-db"
 database_id = "poner-id-de-d1-aqui"
+migrations_dir = "backend/migrations"
