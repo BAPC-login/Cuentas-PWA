@@ -1,0 +1,109 @@
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(56, 189, 248, 0.24), transparent 30rem),
+    radial-gradient(circle at 90% 10%, rgba(167, 139, 250, 0.24), transparent 32rem),
+    rgba(2, 6, 23, 0.94);
+  backdrop-filter: blur(16px);
+}
+
+.auth-gate.hidden {
+  display: none;
+}
+
+.auth-card {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+}
+
+.auth-brand {
+  margin-bottom: 22px;
+}
+
+.auth-step {
+  display: none;
+  gap: 16px;
+}
+
+.auth-step.active {
+  display: grid;
+}
+
+.auth-dev-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 16px;
+  background: rgba(251, 191, 36, 0.08);
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.auth-dev-note strong {
+  color: var(--warning);
+}
+
+body.auth-required .app-shell {
+  filter: blur(10px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.member-card.revoked {
+  opacity: 0.62;
+}
+
+.member-card.pending {
+  border-color: rgba(251, 191, 36, 0.32);
+}
+
+.badge.revoked {
+  background: rgba(251, 113, 133, 0.12);
+  color: var(--danger);
+}
+
+.badge.pending {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--warning);
+}
+
+.session-pill {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--success);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+@media (max-width: 820px) {
+  .topbar-actions {
+    width: auto;
+  }
+
+  .topbar-actions .ghost-button,
+  .topbar-actions .primary-button {
+    width: auto;
+  }
+}
