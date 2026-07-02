@@ -1,3 +1,6 @@
+import('./bill-evidence.js').catch(() => {});
+import('./net-settlement.js').catch(() => {});
+
 const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
   { terms: ['cge', 'enel', 'luz'], categories: ['luz', 'servicios', 'casa'] },
