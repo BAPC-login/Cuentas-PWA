@@ -56,6 +56,7 @@ function addButton(container, id) {
 async function enhanceOperationDetail(operationId) {
   const box = document.querySelector('#operationDetailBills');
   if (!box || !operationId) return;
+  window.__stableCurrentOperationId = operationId;
   try {
     const detail = await api(`/operations/${operationId}`);
     const bills = detail.bills || [];
@@ -146,7 +147,7 @@ async function saveStableBill() {
   if (sum !== total) return alert(`La suma de participantes (${money(sum)}) debe ser igual al total (${money(total)}).`);
   const paidBy = document.querySelector('#stableBillPaidBy').value;
   try {
-    await api(`/bills/${id}`, { method: 'PATCH', body: JSON.stringify({
+    await api(`/bills/${id}/fix`, { method: 'PATCH', body: JSON.stringify({
       title: document.querySelector('#stableBillTitle').value.trim(),
       category_id: document.querySelector('#stableBillCategory').value,
       total_amount: total,
@@ -164,11 +165,14 @@ async function saveStableBill() {
         title: document.querySelector('#stableBillTitle').value.trim(),
         total_amount: total,
         paid_by_user_id: paidBy,
+        operation_id: document.querySelector('#stableBillOperation').value || null,
         service_month: document.querySelector('#stableBillMonth').value,
       },
     });
     document.querySelector('#stableBillEditorDialog').close();
     window.dispatchEvent(new Event('family-data-changed'));
+    const currentOp = window.__stableCurrentOperationId;
+    if (currentOp && document.querySelector('#operationDetailDialog')?.open) setTimeout(() => enhanceOperationDetail(currentOp), 450);
     setTimeout(enhanceBillEditTargets, 900);
   } catch (error) {
     alert(error.message || 'No se pudo guardar el gasto. Si el mes está cerrado, reábrelo primero.');
