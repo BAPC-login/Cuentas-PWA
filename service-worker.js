@@ -1,8 +1,9 @@
-const CACHE_NAME = 'cuentas-pwa-v1';
+const CACHE_NAME = 'cuentas-pwa-v2';
 const APP_SHELL = [
   './',
   './index.html',
   './src/styles.css',
+  './src/auth.css',
   './src/app.js',
   './manifest.webmanifest',
   './assets/icon.svg',
