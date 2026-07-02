@@ -1,5 +1,6 @@
 const API_FAMILY_PRO = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const TOKEN_FAMILY_PRO = 'cuentas-pwa:session-token';
+const CATEGORY_ICONS = ['🏠','💡','💧','🔥','🛒','🧾','🔧','🧺','🚗','📱','🌐','🐶','💊','🎁','🏷️'];
 
 setTimeout(initFamilyPro, 1500);
 window.addEventListener('family-data-changed', () => refreshFamilyPro());
@@ -17,7 +18,8 @@ function injectRealBillsPanel() {
   if (!movements || document.querySelector('#realBillsPanel')) return;
   movements.insertAdjacentHTML('beforeend', `
     <article class="panel" id="realBillsPanel">
-      <div class="panel-header"><div><p class="eyebrow">Cuentas reales</p><h3>Cuentas cargadas en D1</h3></div><button class="text-button" id="realBillsRefresh" type="button">Actualizar</button></div>
+      <div class="panel-header"><div><p class="eyebrow">Cuentas reales</p><h3>Libro de cuentas del hogar</h3></div><button class="text-button" id="realBillsRefresh" type="button">Actualizar</button></div>
+      <p class="muted small">Cuenta = gasto autorizado. Pago = comprobante/transferencia que cubre una deuda. Operación = grupo de gastos relacionados.</p>
       <div class="real-bills-list" id="realBillsList"><div class="empty-state">Cargando cuentas...</div></div>
     </article>
   `);
@@ -31,7 +33,10 @@ function injectCategoryPanel() {
     <article class="panel" id="categoryPanel">
       <div class="panel-header"><div><p class="eyebrow">Categorías</p><h3>Categorías personalizadas</h3></div></div>
       <form id="categoryForm" class="form-stack">
-        <div class="form-row"><label class="field"><span>Nombre</span><input id="categoryNameInput" placeholder="Ej: Arriendo, Gastos comunes, Medicamentos"></label><label class="field"><span>Icono</span><input id="categoryIconInput" placeholder="🏠"></label></div>
+        <div class="form-row">
+          <label class="field"><span>Nombre</span><input id="categoryNameInput" placeholder="Ej: Arriendo, Gastos comunes, Medicamentos"></label>
+          <label class="field"><span>Icono</span><select id="categoryIconInput">${CATEGORY_ICONS.map(i => `<option value="${i}">${i}</option>`).join('')}</select></label>
+        </div>
         <button class="secondary-button" type="submit">Crear categoría</button>
       </form>
       <div class="category-chip-list" id="categoryChipList"></div>
@@ -71,9 +76,15 @@ async function refreshFamilyPro() {
     renderCategories(cats.categories || []);
     renderTopTotals(dash);
     if (!me.user?.name) setTimeout(openProfileDialog, 400);
+    applyFamilyMode(me.user);
   } catch (error) {
     console.warn('family-pro', error);
   }
+}
+
+function applyFamilyMode(user) {
+  const isOwner = user?.role === 'owner';
+  document.body.classList.toggle('member-mode', !isOwner);
 }
 
 function renderTopTotals(dash) {
@@ -91,8 +102,8 @@ function renderRealBills(bills) {
   const list = document.querySelector('#realBillsList');
   if (!list) return;
   list.innerHTML = bills.length ? bills.map((b) => `
-    <article class="real-bill-card">
-      <div><strong>${escapeHtml(b.category_icon || '')} ${escapeHtml(b.title)}</strong><small>${escapeHtml(b.category_name || '')} · corresponde a ${escapeHtml(b.service_month || String(b.bill_date || '').slice(0,7))} · pago/emisión ${escapeHtml(b.bill_date || '')}</small></div>
+    <article class="real-bill-card" data-bill-id="${escapeHtml(b.id)}">
+      <div><strong>${escapeHtml(b.category_icon || '')} ${escapeHtml(b.title)}</strong><small>${escapeHtml(b.category_name || '')} · corresponde a ${escapeHtml(b.service_month || String(b.bill_date || '').slice(0,7))} · pago/emisión ${escapeHtml(b.bill_date || '')}${b.operation_title ? ' · operación: ' + escapeHtml(b.operation_title) : ''}</small></div>
       <div><b>${money(b.total_amount)}</b><span class="badge ${b.status === 'paid' ? 'settled' : 'open'}">${labelStatus(b.status)}</span></div>
     </article>
   `).join('') : '<div class="empty-state">Aún no hay cuentas reales cargadas.</div>';
@@ -107,12 +118,13 @@ function renderCategories(cats) {
 async function createCategory(event) {
   event.preventDefault();
   const name = document.querySelector('#categoryNameInput').value.trim();
-  const icon = document.querySelector('#categoryIconInput').value.trim() || '🏷️';
+  const icon = document.querySelector('#categoryIconInput').value || '🏷️';
   if (!name) return;
   await api('/categories', { method: 'POST', body: JSON.stringify({ name, icon, kind: 'expense' }) });
   document.querySelector('#categoryNameInput').value = '';
-  document.querySelector('#categoryIconInput').value = '';
+  document.querySelector('#categoryIconInput').value = '🏷️';
   await refreshFamilyPro();
+  window.dispatchEvent(new Event('family-data-changed'));
 }
 
 function openProfileDialog() {
@@ -147,7 +159,7 @@ function injectFamilyProStyles() {
   const style = document.createElement('style');
   style.id = 'familyProStyles';
   style.textContent = `
-    .real-bills-list,.category-chip-list{display:grid;gap:10px}.real-bill-card{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.real-bill-card strong{display:block}.real-bill-card small{display:block;margin-top:4px;color:var(--muted)}.real-bill-card b{display:block;text-align:right;margin-bottom:8px}.category-chip-list{display:flex;flex-wrap:wrap;margin-top:14px}.category-chip{border:1px solid var(--line);border-radius:999px;padding:8px 12px;background:rgba(148,163,184,.08);font-weight:800}.profile-dialog{width:min(520px,calc(100vw - 24px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.profile-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.profile-card{position:relative;display:grid;gap:14px;padding:24px}.profile-card h3{margin:0;font-size:1.7rem}@media(max-width:760px){.real-bill-card{display:grid}.real-bill-card b{text-align:left}.profile-card{padding:22px 16px}}
+    .real-bills-list,.category-chip-list{display:grid;gap:10px}.real-bill-card{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.real-bill-card strong{display:block}.real-bill-card small{display:block;margin-top:4px;color:var(--muted)}.real-bill-card b{display:block;text-align:right;margin-bottom:8px}.category-chip-list{display:flex;flex-wrap:wrap;margin-top:14px}.category-chip{border:1px solid var(--line);border-radius:999px;padding:8px 12px;background:rgba(148,163,184,.08);font-weight:800}.profile-dialog{width:min(520px,calc(100vw - 24px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.profile-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.profile-card{position:relative;display:grid;gap:14px;padding:24px}.profile-card h3{margin:0;font-size:1.7rem}.member-mode #view-people .owner-only,.member-mode #categoryPanel,.member-mode .danger-zone{display:none!important}@media(max-width:760px){.real-bill-card{display:grid}.real-bill-card b{text-align:left}.profile-card{padding:22px 16px}}
   `;
   document.head.appendChild(style);
 }
