@@ -1,6 +1,7 @@
 import { listCategories, createCategory, listBills, getBillDetails, updateBillParticipants, updateBillStatus, listPayments, createPayment, listReceipts, approveReceipt, rejectReceipt, dashboard, listOperations, getOperationDetails, createOperation, updateOperation } from './family.js';
 import { listActiveUsers, createBillExtended, createReceiptExtended, deleteBillExtended, listDebtsDetailed } from './family_ext.js';
 import { listTemplates, createTemplate, deleteTemplate, duplicateCheck, listMonthClosures, closeMonth, openMonth } from './pro_tools.js';
+import { updateBillFixed } from './bill_fix.js';
 
 export default {
   async fetch(request, env) {
@@ -23,6 +24,7 @@ export default {
       if (url.pathname === '/categories' && request.method === 'POST') return createCategory(request, env);
       if (url.pathname === '/bills' && request.method === 'GET') return listBills(request, env);
       if (url.pathname === '/bills' && request.method === 'POST') return createBillExtended(request, env);
+      if (url.pathname.match(/^\/bills\/[^/]+\/fix$/) && request.method === 'PATCH') return updateBillFixed(request, env);
       if (url.pathname.match(/^\/bills\/[^/]+$/) && request.method === 'GET') return getBillDetails(request, env);
       if (url.pathname.match(/^\/bills\/[^/]+$/) && request.method === 'PATCH') return updateBillParticipants(request, env);
       if (url.pathname.match(/^\/bills\/[^/]+$/) && request.method === 'DELETE') return deleteBillExtended(request, env);
