@@ -19,8 +19,8 @@ function injectDebtPanel() {
   if (!dashboard || document.querySelector('#debtMatrixPanel')) return;
   dashboard.insertAdjacentHTML('afterbegin', `
     <article class="panel" id="debtMatrixPanel">
-      <div class="panel-header"><div><p class="eyebrow">Balance neto</p><h3>Quién debe pagar a quién</h3></div><button class="text-button" id="debtRefresh" type="button">Actualizar</button></div>
-      <p class="muted small">Las deudas se compensan automáticamente. Si A debe a B y B debe a A, solo queda el saldo final.</p>
+      <div class="panel-header"><div><p class="eyebrow">Detalle y balance</p><h3>Deudas abiertas del hogar</h3></div><button class="text-button" id="debtRefresh" type="button">Actualizar</button></div>
+      <p class="muted small">Primero se muestra cada deuda por gasto. Al final se calcula el saldo neto compensado entre personas.</p>
       <div class="debt-list" id="debtMatrixList"><div class="empty-state">Cargando deudas...</div></div>
     </article>
   `);
@@ -123,13 +123,35 @@ async function refreshDebtsOps() {
 function renderDebts(data) {
   const list = document.querySelector('#debtMatrixList');
   if (!list) return;
-  const rows = netDebtRows(data.debts || []);
-  list.innerHTML = rows.length ? rows.map((d) => `
-    <article class="debt-card net-debt-card">
-      <div><strong>${escapeHtml(d.debtor_name)} debe pagar a ${escapeHtml(d.receiver_name)}</strong><small>Saldo neto compensado entre ambas personas · no muestra deudas cruzadas duplicadas</small></div>
-      <b>${money(d.amount)}</b>
-    </article>
-  `).join('') : '<div class="empty-state">No hay deuda pendiente registrada. Todo está compensado.</div>';
+  const details = data.details || [];
+  const netRows = data.net_summary?.length ? data.net_summary : netDebtRows(data.debts || []);
+  if (!details.length && !netRows.length) {
+    list.innerHTML = '<div class="empty-state">No hay deuda pendiente registrada. Todo está compensado.</div>';
+    return;
+  }
+  const detailHtml = details.length ? `
+    <div class="debt-section-title"><span>Detalle por gasto</span><small>${details.length} deuda${details.length === 1 ? '' : 's'} abierta${details.length === 1 ? '' : 's'}</small></div>
+    ${details.map((d) => `
+      <article class="debt-card debt-detail-card">
+        <div>
+          <strong>${escapeHtml(d.debtor_name || d.debtor_email)} debe a ${escapeHtml(d.receiver_name || d.receiver_email)}</strong>
+          <small>${escapeHtml(d.category_icon || '')} ${escapeHtml(d.bill_title)} · ${escapeHtml(d.category_name || '')} · mes ${escapeHtml(d.service_month || '')}${d.operation_title ? ' · operación: ' + escapeHtml(d.operation_title) : ''}</small>
+          <small>Asignado ${money(d.total_assigned)} · pagado ${money(d.total_paid)}</small>
+        </div>
+        <b>${money(d.pending)}</b>
+      </article>
+    `).join('')}
+  ` : '';
+  const netHtml = netRows.length ? `
+    <div class="debt-section-title net-summary-title"><span>Balance final neto</span><small>Después de compensar deudas cruzadas</small></div>
+    ${netRows.map((d) => `
+      <article class="debt-card net-debt-card">
+        <div><strong>${escapeHtml(d.debtor_name)} debe pagar a ${escapeHtml(d.receiver_name)}</strong><small>Saldo final compensado entre ambas personas</small></div>
+        <b>${money(d.amount)}</b>
+      </article>
+    `).join('')}
+  ` : '<div class="debt-section-title net-summary-title"><span>Balance final neto</span><small>Todo compensado entre personas</small></div>';
+  list.innerHTML = detailHtml + netHtml;
 }
 
 function renderOperationControls(cats) {
@@ -355,7 +377,7 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'debtsOpsStyles';
   style.textContent = `
-    .debt-list,.ops-list,.detail-list{display:grid;gap:10px}.debt-card,.op-card,.detail-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.net-debt-card{border-color:rgba(34,197,94,.28);background:linear-gradient(135deg,rgba(34,197,94,.12),rgba(56,189,248,.07))}.debt-card small,.op-card small,.detail-row small{display:block;color:var(--muted);margin-top:4px}.debt-card b,.op-card b,.detail-row b{display:block;text-align:right;margin-bottom:8px}.tiny-button{border:1px solid var(--line);background:rgba(56,189,248,.12);color:var(--text);border-radius:999px;padding:7px 10px;font-weight:900;cursor:pointer}.bill-editor-dialog{width:min(820px,calc(100vw - 20px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.bill-editor-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.bill-editor-card{position:relative;display:grid;gap:14px;padding:24px}.bill-editor-card h3{margin:0;font-size:1.55rem}.bill-editor-card .participant-row{grid-template-columns:auto 1fr 130px}.split-mode{display:flex;gap:10px;flex-wrap:wrap}.split-mode label{border:1px solid var(--line);border-radius:999px;padding:8px 10px;font-weight:800;color:var(--muted)}.split-mode input{margin-right:6px}.compact-summary{grid-template-columns:repeat(3,1fr)}@media(max-width:760px){.debt-card,.op-card,.detail-row{display:grid}.debt-card b,.op-card b,.detail-row b{text-align:left}.bill-editor-card{padding:22px 14px}.bill-editor-card .participant-row{grid-template-columns:auto 1fr}.bill-editor-card .participant-row input[type="number"]{grid-column:2;width:100%}.compact-summary{grid-template-columns:1fr}}
+    .debt-list,.ops-list,.detail-list{display:grid;gap:10px}.debt-card,.op-card,.detail-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.debt-detail-card{background:rgba(148,163,184,.07)}.net-debt-card{border-color:rgba(34,197,94,.28);background:linear-gradient(135deg,rgba(34,197,94,.12),rgba(56,189,248,.07))}.debt-section-title{display:flex;justify-content:space-between;align-items:end;margin:10px 2px 2px;color:var(--muted);font-size:.86rem}.debt-section-title span{color:var(--text);font-weight:950}.net-summary-title{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}.debt-card small,.op-card small,.detail-row small{display:block;color:var(--muted);margin-top:4px}.debt-card b,.op-card b,.detail-row b{display:block;text-align:right;margin-bottom:8px}.tiny-button{border:1px solid var(--line);background:rgba(56,189,248,.12);color:var(--text);border-radius:999px;padding:7px 10px;font-weight:900;cursor:pointer}.bill-editor-dialog{width:min(820px,calc(100vw - 20px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.bill-editor-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.bill-editor-card{position:relative;display:grid;gap:14px;padding:24px}.bill-editor-card h3{margin:0;font-size:1.55rem}.bill-editor-card .participant-row{grid-template-columns:auto 1fr 130px}.split-mode{display:flex;gap:10px;flex-wrap:wrap}.split-mode label{border:1px solid var(--line);border-radius:999px;padding:8px 10px;font-weight:800;color:var(--muted)}.split-mode input{margin-right:6px}.compact-summary{grid-template-columns:repeat(3,1fr)}@media(max-width:760px){.debt-card,.op-card,.detail-row{display:grid}.debt-card b,.op-card b,.detail-row b{text-align:left}.debt-section-title{display:grid;gap:3px}.bill-editor-card{padding:22px 14px}.bill-editor-card .participant-row{grid-template-columns:auto 1fr}.bill-editor-card .participant-row input[type="number"]{grid-column:2;width:100%}.compact-summary{grid-template-columns:1fr}}
   `;
   document.head.appendChild(style);
 }
