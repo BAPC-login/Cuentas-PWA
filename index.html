@@ -35,7 +35,7 @@
             <span>Usuario</span>
             <select id="activeMemberSelect"></select>
           </label>
-          <p class="muted small">Todo se calcula desde el usuario seleccionado. Así “María te debe” cambia automáticamente en la vista de María.</p>
+          <p class="muted small">La cuenta se interpreta desde quien mira. El owner administra usuarios en el apartado Usuarios.</p>
         </section>
 
         <button class="ghost-button" id="themeToggle" type="button">Cambiar tema</button>
@@ -181,25 +181,39 @@
             <article class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Usuarios</p>
-                  <h3>Integrantes</h3>
+                  <p class="eyebrow">Administración</p>
+                  <h3>Usuarios personalizados</h3>
                 </div>
+                <span class="badge" id="ownerStatusBadge">Owner</span>
               </div>
-              <form id="memberForm" class="inline-form">
-                <input id="memberNameInput" placeholder="Nombre nuevo" maxlength="40" />
-                <button class="secondary-button" type="submit">Agregar</button>
+              <p class="muted small" id="ownerHelpText">Solo el owner puede crear y eliminar usuarios.</p>
+              <form id="memberForm" class="form-stack owner-only">
+                <div class="form-row">
+                  <label class="field">
+                    <span>Nombre del usuario</span>
+                    <input id="memberNameInput" placeholder="Ej: María, Iriannys, Casa 2" maxlength="40" />
+                  </label>
+                  <label class="field">
+                    <span>Rol</span>
+                    <select id="memberRoleSelect">
+                      <option value="member">Usuario</option>
+                      <option value="viewer">Solo lectura</option>
+                    </select>
+                  </label>
+                </div>
+                <button class="secondary-button" type="submit">Crear usuario</button>
               </form>
               <div id="memberList" class="member-list"></div>
             </article>
 
             <article class="panel glass-note">
-              <p class="eyebrow">Siguiente etapa</p>
-              <h3>Usuarios reales y sincronización</h3>
-              <p>Esta primera versión funciona como PWA offline. El próximo salto es conectar una base compartida para que Benjamín, María e Iriannys vean la misma información desde sus teléfonos.</p>
+              <p class="eyebrow">Regla del sistema</p>
+              <h3>El owner controla el hogar</h3>
+              <p>Los usuarios ya no están pensados como una lista fija. El owner crea, elimina y decide quién participa en las cuentas.</p>
               <ul class="check-list">
-                <li>Login simple por usuario.</li>
-                <li>Sincronización con Sheets, Supabase o Firebase.</li>
-                <li>Lectura de comprobantes con IA/OCR.</li>
+                <li>Owner protegido: no se puede eliminar.</li>
+                <li>Usuarios creados a medida desde la app.</li>
+                <li>Próximo paso: login real y sincronización compartida.</li>
               </ul>
             </article>
           </div>
