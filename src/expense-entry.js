@@ -45,7 +45,7 @@ async function hydrateExpenseEntry() {
   const token = localStorage.getItem(TOKEN_EXPENSE);
   if (!token || !document.querySelector('#expenseEntryPanel')) return;
   try {
-    const [me, cats, users, ops] = await Promise.all([api('/me'), api('/categories'), api('/owner/users').catch(() => ({ users: [] })), api('/operations').catch(() => ({ operations: [] }))]);
+    const [me, cats, users, ops] = await Promise.all([api('/me'), api('/categories'), api('/users').catch(() => ({ users: [] })), api('/operations').catch(() => ({ operations: [] }))]);
     window.__expenseMe = me.user;
     window.__expenseUsers = (users.users?.length ? users.users : [me.user]).filter((u) => u && u.status !== 'revoked');
     renderExpenseOptions(cats.categories || [], ops.operations || []);
