@@ -1,4 +1,4 @@
-const RULES = [
+const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
   { terms: ['cge', 'enel', 'luz'], categories: ['luz', 'servicios', 'casa'] },
   { terms: ['essbio', 'agua'], categories: ['agua', 'servicios', 'casa'] },
@@ -7,9 +7,20 @@ const RULES = [
   { terms: ['wom', 'entel', 'movistar', 'claro', 'internet', 'fibra'], categories: ['internet', 'teléfono', 'telefono', 'servicios'] },
   { terms: ['lavadora', 'técnico', 'tecnico', 'repuesto', 'diagnóstico', 'diagnostico'], categories: ['mantención', 'mantencion', 'reparación', 'reparacion', 'hogar'] },
 ];
+const RULE_KEY = 'cuentas-pwa:auto-rules';
 
 setTimeout(initAutoRules, 2300);
 window.addEventListener('family-data-changed', () => setTimeout(initAutoRules, 300));
+window.addEventListener('family-rules-changed', () => setTimeout(initAutoRules, 150));
+
+function getRules() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RULE_KEY) || '[]');
+    return saved.length ? saved : DEFAULT_RULES;
+  } catch {
+    return DEFAULT_RULES;
+  }
+}
 
 function initAutoRules() {
   injectRuleHint();
@@ -37,13 +48,13 @@ function applyCategoryRule(rawTitle) {
   const select = document.querySelector('#expenseCategory');
   const hint = document.querySelector('#autoRuleHint');
   if (!title || !select) return;
-  const rule = RULES.find((r) => r.terms.some((term) => title.includes(normalize(term))));
+  const rule = getRules().find((r) => (r.terms || []).some((term) => title.includes(normalize(term))));
   if (!rule) {
     if (hint) { hint.textContent = ''; hint.classList.remove('active'); }
     return;
   }
   const options = [...select.options];
-  const found = options.find((option) => rule.categories.some((cat) => normalize(option.textContent).includes(normalize(cat))));
+  const found = options.find((option) => (rule.categories || []).some((cat) => normalize(option.textContent).includes(normalize(cat))));
   if (found) {
     select.value = found.value;
     if (hint) { hint.textContent = `Regla aplicada: ${found.textContent.trim()}`; hint.classList.add('active'); }
