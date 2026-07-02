@@ -38,16 +38,24 @@ export async function createBill(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
   const body = await readJson(request);
+  const result = await createBillRecord(env, auth.user, body);
+  if (result.error) return json(result, env, result.status || 400);
+  return json({ ok: true, bill: result.bill }, env, 201);
+}
+
+async function createBillRecord(env, user, body) {
   const title = String(body.title || '').trim();
   const categoryId = String(body.category_id || '').trim();
   const total = toInt(body.total_amount);
   const billDate = String(body.bill_date || today()).slice(0, 10);
   const participants = Array.isArray(body.participants) ? body.participants : [];
-  if (!title || !categoryId || total <= 0) return json({ error: 'invalid_bill', message: 'Faltan datos de la cuenta.' }, env, 400);
-  if (!participants.length) return json({ error: 'participants_required', message: 'Selecciona al menos un participante.' }, env, 400);
+  if (!title || !categoryId || total <= 0) return { error: 'invalid_bill', message: 'Faltan datos de la cuenta.', status: 400 };
+  if (!participants.length) return { error: 'participants_required', message: 'Selecciona al menos un participante.', status: 400 };
+  const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
+  if (shareSum !== total) return { error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.', status: 400 };
   const billId = 'bill-' + crypto.randomUUID();
   await env.DB.prepare('INSERT INTO bills (id, category_id, title, description, total_amount, bill_date, due_date, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(billId, categoryId, title, body.description || null, total, billDate, body.due_date || null, 'open', auth.user.id)
+    .bind(billId, categoryId, title, body.description || null, total, billDate, body.due_date || null, body.status || 'open', user.id)
     .run();
   for (const p of participants) {
     const userId = String(p.user_id || '').trim();
@@ -58,13 +66,13 @@ export async function createBill(request, env) {
         .run();
     }
   }
-  return json({ ok: true, bill: await getBill(env, billId) }, env, 201);
+  return { bill: await getBill(env, billId) };
 }
 
 export async function updateBillStatus(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
-  const id = new URL(request.url).pathname.split('/')[2];
+  const id = pathPart(request, 1);
   const { status } = await readJson(request);
   const allowed = ['open', 'partial', 'paid', 'overdue', 'cancelled'];
   if (!allowed.includes(status)) return json({ error: 'invalid_status', message: 'Estado invalido.' }, env, 400);
@@ -101,8 +109,12 @@ export async function createPayment(request, env) {
       await env.DB.prepare('INSERT INTO payment_allocations (id, payment_id, bill_id, user_id, amount, note) VALUES (?, ?, ?, ?, ?, ?)')
         .bind('alloc-' + crypto.randomUUID(), paymentId, billId, userId, amount, a.note || null)
         .run();
+      await env.DB.prepare('UPDATE bill_participants SET paid_amount = paid_amount + ? WHERE bill_id = ? AND user_id = ?')
+        .bind(amount, billId, userId)
+        .run();
     }
   }
+  await refreshBillStatuses(env, allocations.map((a) => String(a.bill_id || '')).filter(Boolean));
   return json({ ok: true, payment: await getPayment(env, paymentId) }, env, 201);
 }
 
@@ -120,8 +132,49 @@ export async function createReceipt(request, env) {
 export async function listReceipts(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
-  const { results } = await env.DB.prepare('SELECT r.*, u.name AS uploaded_by_name FROM receipts r JOIN users u ON u.id = r.uploaded_by ORDER BY r.created_at DESC LIMIT 100').all();
+  const url = new URL(request.url);
+  const status = url.searchParams.get('status');
+  let sql = 'SELECT r.*, u.name AS uploaded_by_name FROM receipts r JOIN users u ON u.id = r.uploaded_by';
+  const binds = [];
+  if (status) { sql += ' WHERE r.status = ?'; binds.push(status); }
+  sql += ' ORDER BY r.created_at DESC LIMIT 100';
+  const { results } = await env.DB.prepare(sql).bind(...binds).all();
   return json({ receipts: results }, env);
+}
+
+export async function approveReceipt(request, env) {
+  const auth = await requireSession(request, env);
+  if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
+  const receiptId = pathPart(request, 1);
+  const receipt = await getReceipt(env, receiptId);
+  if (!receipt) return json({ error: 'receipt_not_found', message: 'Comprobante no encontrado.' }, env, 404);
+  const body = await readJson(request);
+  const billBody = {
+    category_id: body.category_id,
+    title: body.title || receipt.file_name || 'Comprobante aprobado',
+    description: body.description || receipt.raw_text || null,
+    total_amount: body.total_amount || receipt.detected_amount,
+    bill_date: body.bill_date || receipt.detected_date || today(),
+    participants: body.participants || [{ user_id: auth.user.id, share_amount: body.total_amount || receipt.detected_amount }],
+  };
+  const result = await createBillRecord(env, auth.user, billBody);
+  if (result.error) return json(result, env, result.status || 400);
+  await env.DB.prepare('UPDATE receipts SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+    .bind('approved', auth.user.id, new Date().toISOString(), receiptId)
+    .run();
+  return json({ ok: true, receipt: await getReceipt(env, receiptId), bill: result.bill }, env);
+}
+
+export async function rejectReceipt(request, env) {
+  const auth = await requireSession(request, env);
+  if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
+  const receiptId = pathPart(request, 1);
+  const receipt = await getReceipt(env, receiptId);
+  if (!receipt) return json({ error: 'receipt_not_found', message: 'Comprobante no encontrado.' }, env, 404);
+  await env.DB.prepare('UPDATE receipts SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+    .bind('rejected', auth.user.id, new Date().toISOString(), receiptId)
+    .run();
+  return json({ ok: true, receipt: await getReceipt(env, receiptId) }, env);
 }
 
 export async function dashboard(request, env) {
@@ -129,9 +182,21 @@ export async function dashboard(request, env) {
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
   const monthly = await env.DB.prepare(`SELECT substr(bill_date,1,7) AS month, SUM(total_amount) AS total FROM bills WHERE status != 'cancelled' GROUP BY month ORDER BY month`).all();
   const byCategory = await env.DB.prepare(`SELECT c.name, c.icon, SUM(b.total_amount) AS total FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.status != 'cancelled' GROUP BY c.id, c.name, c.icon ORDER BY total DESC`).all();
-  const pendingByUser = await env.DB.prepare(`SELECT u.id, u.name, u.email, SUM(bp.share_amount - bp.paid_amount) AS pending FROM bill_participants bp JOIN users u ON u.id = bp.user_id WHERE bp.status != 'paid' GROUP BY u.id, u.name, u.email ORDER BY pending DESC`).all();
+  const pendingByUser = await env.DB.prepare(`SELECT u.id, u.name, u.email, SUM(bp.share_amount - bp.paid_amount) AS pending FROM bill_participants bp JOIN users u ON u.id = bp.user_id WHERE bp.status != 'paid' GROUP BY u.id, u.name, u.email HAVING pending > 0 ORDER BY pending DESC`).all();
   const curves = await env.DB.prepare(`SELECT substr(b.bill_date,1,7) AS month, c.name AS category, SUM(b.total_amount) AS total FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.status != 'cancelled' GROUP BY month, c.name ORDER BY month, c.name`).all();
   return json({ monthly: monthly.results, by_category: byCategory.results, pending_by_user: pendingByUser.results, curves: curves.results }, env);
+}
+
+async function refreshBillStatuses(env, billIds) {
+  for (const id of [...new Set(billIds)]) {
+    const summary = await env.DB.prepare('SELECT SUM(share_amount) AS total, SUM(paid_amount) AS paid FROM bill_participants WHERE bill_id = ?').bind(id).first();
+    if (!summary) continue;
+    const total = Number(summary.total || 0);
+    const paid = Number(summary.paid || 0);
+    const status = paid <= 0 ? 'open' : paid >= total ? 'paid' : 'partial';
+    await env.DB.prepare('UPDATE bills SET status = ?, updated_at = ? WHERE id = ?').bind(status, new Date().toISOString(), id).run();
+    await env.DB.prepare("UPDATE bill_participants SET status = CASE WHEN paid_amount >= share_amount THEN 'paid' WHEN paid_amount > 0 THEN 'partial' ELSE 'pending' END WHERE bill_id = ?").bind(id).run();
+  }
 }
 
 async function getCategory(env, id) { return env.DB.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first(); }
@@ -149,6 +214,7 @@ async function requireSession(request, env) {
   return { session, user };
 }
 
+function pathPart(request, index) { return new URL(request.url).pathname.split('/').filter(Boolean)[index]; }
 async function digest(value) { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join(''); }
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
 function toInt(value) { return Math.max(0, Math.round(Number(String(value || 0).replace(/[^0-9.-]/g, '')) || 0)); }
