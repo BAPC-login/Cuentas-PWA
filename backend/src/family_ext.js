@@ -1,3 +1,10 @@
+export async function listActiveUsers(request, env) {
+  const auth = await requireSession(request, env);
+  if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
+  const { results } = await env.DB.prepare('SELECT id, email, name, avatar_url, role, status FROM users WHERE status != ? ORDER BY role = ? DESC, name, email').bind('revoked', 'owner').all();
+  return json({ users: results }, env);
+}
+
 export async function createBillExtended(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
@@ -114,13 +121,7 @@ async function sendNotificationEmails(env, users, subject, message) {
   const unique = [...new Map((users || []).filter((u) => u.email).map((u) => [u.email, u])).values()];
   for (const u of unique) {
     try {
-      const form = new URLSearchParams({
-        secret: env.EMAIL_RELAY_SECRET,
-        to: u.email,
-        subject,
-        message,
-        appName: 'Cuentas Hogar',
-      });
+      const form = new URLSearchParams({ secret: env.EMAIL_RELAY_SECRET, to: u.email, subject, message, appName: 'Cuentas Hogar' });
       await fetch(env.EMAIL_RELAY_URL, { method: 'POST', body: form });
     } catch {}
   }
