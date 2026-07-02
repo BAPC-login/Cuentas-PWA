@@ -1,5 +1,6 @@
 import { listCategories, createCategory, listBills, getBillDetails, updateBillParticipants, updateBillStatus, listPayments, createPayment, listReceipts, approveReceipt, rejectReceipt, dashboard, listOperations, getOperationDetails, createOperation, updateOperation } from './family.js';
 import { listActiveUsers, createBillExtended, createReceiptExtended, deleteBillExtended, listDebtsDetailed } from './family_ext.js';
+import { listTemplates, createTemplate, deleteTemplate, duplicateCheck, listMonthClosures, closeMonth, openMonth } from './pro_tools.js';
 
 export default {
   async fetch(request, env) {
@@ -31,6 +32,13 @@ export default {
       if (url.pathname === '/operations' && request.method === 'POST') return createOperation(request, env);
       if (url.pathname.match(/^\/operations\/[^/]+$/) && request.method === 'GET') return getOperationDetails(request, env);
       if (url.pathname.match(/^\/operations\/[^/]+$/) && request.method === 'PATCH') return updateOperation(request, env);
+      if (url.pathname === '/templates' && request.method === 'GET') return listTemplates(request, env);
+      if (url.pathname === '/templates' && request.method === 'POST') return createTemplate(request, env);
+      if (url.pathname.match(/^\/templates\/[^/]+$/) && request.method === 'DELETE') return deleteTemplate(request, env);
+      if (url.pathname === '/duplicates/check' && request.method === 'GET') return duplicateCheck(request, env);
+      if (url.pathname === '/month-closures' && request.method === 'GET') return listMonthClosures(request, env);
+      if (url.pathname === '/month-closures' && request.method === 'POST') return closeMonth(request, env);
+      if (url.pathname.match(/^\/month-closures\/[^/]+$/) && request.method === 'DELETE') return openMonth(request, env);
       if (url.pathname === '/payments' && request.method === 'GET') return listPayments(request, env);
       if (url.pathname === '/payments' && request.method === 'POST') return createPayment(request, env);
       if (url.pathname === '/receipts' && request.method === 'GET') return listReceipts(request, env);
