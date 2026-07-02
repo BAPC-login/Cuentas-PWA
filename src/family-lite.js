@@ -1,5 +1,6 @@
 import './mobile-fix.js';
 import './receipts-review.js';
+import './family-pro.js';
 
 const API_BASE_FAMILY = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const SESSION_TOKEN_KEY_FAMILY = 'cuentas-pwa:session-token';
@@ -21,6 +22,7 @@ function initFamilyLite() {
     </article>
   `);
   document.querySelector('#familyLiteReload').addEventListener('click', loadFamilyLite);
+  window.addEventListener('family-data-changed', loadFamilyLite);
   loadFamilyLite();
 }
 
