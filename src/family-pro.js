@@ -20,8 +20,12 @@ function injectRealBillsPanel() {
   if (!movements || document.querySelector('#realBillsPanel')) return;
   movements.insertAdjacentHTML('beforeend', `
     <article class="panel" id="realBillsPanel">
-      <div class="panel-header"><div><p class="eyebrow">Cuentas reales</p><h3>Libro de cuentas del hogar</h3></div><button class="text-button" id="realBillsRefresh" type="button">Actualizar</button></div>
-      <p class="muted small">Cuenta = gasto autorizado. Pago = comprobante/transferencia que cubre una deuda. Operación = grupo de gastos relacionados.</p>
+      <div class="panel-header"><div><p class="eyebrow">Libro contable</p><h3>Cuentas comunes del hogar</h3></div><button class="text-button" id="realBillsRefresh" type="button">Actualizar</button></div>
+      <p class="muted small">Aquí se muestran solo gastos simples y gastos compuestos agrupados. Los ítems internos de una operación no se duplican en la lista principal.</p>
+      <div id="ledgerStats" class="ledger-stats"></div>
+      <div class="ledger-section-title"><span>Gastos compuestos</span><small>Operaciones agrupadas</small></div>
+      <div class="real-bills-list" id="operationLedgerList"><div class="empty-state">Sin operaciones compuestas.</div></div>
+      <div class="ledger-section-title"><span>Gastos simples</span><small>Cuentas directas</small></div>
       <div class="real-bills-list" id="realBillsList"><div class="empty-state">Cargando cuentas...</div></div>
     </article>
   `);
@@ -71,12 +75,21 @@ async function refreshFamilyPro() {
   const token = localStorage.getItem(TOKEN_FAMILY_PRO);
   if (!token) return;
   try {
-    const [me, bills, cats, dash] = await Promise.all([api('/me'), api('/bills'), api('/categories'), api('/dashboard')]);
+    const [me, bills, cats, dash, ops, debts] = await Promise.all([
+      api('/me'),
+      api('/bills'),
+      api('/categories'),
+      api('/dashboard'),
+      api('/operations').catch(() => ({ operations: [] })),
+      api('/debts').catch(() => ({ debts: [] })),
+    ]);
     window.__familyProMe = me.user;
     window.__familyProCategories = cats.categories || [];
-    renderRealBills(bills.bills || []);
+    const allBills = bills.bills || [];
+    renderRealBills(allBills, ops.operations || []);
     renderCategories(cats.categories || []);
-    renderTopTotals(dash);
+    renderTopTotals(dash, debts.debts || []);
+    renderLedgerStats(allBills, ops.operations || [], debts.debts || []);
     if (!me.user?.name) setTimeout(openProfileDialog, 400);
     applyFamilyMode(me.user);
   } catch (error) {
@@ -89,26 +102,59 @@ function applyFamilyMode(user) {
   document.body.classList.toggle('member-mode', !isOwner);
 }
 
-function renderTopTotals(dash) {
-  const pending = dash.pending_by_user || [];
+function renderTopTotals(dash, debts = []) {
+  const netRows = netDebtRows(debts);
+  const totalPending = netRows.reduce((s, r) => s + r.amount, 0);
   const me = window.__familyProMe;
-  const mine = pending.find((p) => p.id === me?.id)?.pending || 0;
-  const totalPending = pending.reduce((s, p) => s + Number(p.pending || 0), 0);
+  const myOwe = netRows.filter((r) => r.debtor_id === me?.id).reduce((s, r) => s + r.amount, 0);
+  const myFavor = netRows.filter((r) => r.receiver_id === me?.id).reduce((s, r) => s + r.amount, 0);
   const net = document.querySelector('#netBalance');
   const hint = document.querySelector('#balanceHint');
   if (net) net.textContent = money(totalPending);
-  if (hint) hint.textContent = totalPending ? `Pendiente familiar total. Tu pendiente: ${money(mine)}.` : 'No hay cuentas pendientes en D1.';
+  if (hint) hint.textContent = totalPending ? `Deuda neta abierta. Tu saldo: ${myFavor >= myOwe ? 'a favor ' + money(myFavor - myOwe) : 'por pagar ' + money(myOwe - myFavor)}.` : 'Todas las cuentas están compensadas.';
+  const owedToMe = document.querySelector('#owedToMe');
+  const iOwe = document.querySelector('#iOwe');
+  if (owedToMe) owedToMe.textContent = money(myFavor);
+  if (iOwe) iOwe.textContent = money(myOwe);
 }
 
-function renderRealBills(bills) {
+function renderLedgerStats(bills, ops, debts) {
+  const box = document.querySelector('#ledgerStats');
+  if (!box) return;
+  const simpleBills = bills.filter((b) => !b.operation_id);
+  const compoundTotal = ops.reduce((s, op) => s + Number(op.total_amount || 0), 0);
+  const simpleTotal = simpleBills.reduce((s, b) => s + Number(b.total_amount || 0), 0);
+  const netOpen = netDebtRows(debts).reduce((s, r) => s + r.amount, 0);
+  box.innerHTML = `
+    <div><span>Total simple</span><strong>${money(simpleTotal)}</strong></div>
+    <div><span>Total operaciones</span><strong>${money(compoundTotal)}</strong></div>
+    <div><span>Deuda neta abierta</span><strong>${money(netOpen)}</strong></div>
+  `;
+}
+
+function renderRealBills(bills, ops = []) {
   const list = document.querySelector('#realBillsList');
+  const opList = document.querySelector('#operationLedgerList');
   if (!list) return;
-  list.innerHTML = bills.length ? bills.map((b) => `
+  const simpleBills = bills.filter((b) => !b.operation_id);
+  list.innerHTML = simpleBills.length ? simpleBills.map(renderBillCard).join('') : '<div class="empty-state">No hay gastos simples. Si pertenecen a una operación, aparecen arriba como gasto compuesto.</div>';
+  if (opList) {
+    opList.innerHTML = ops.length ? ops.map((op) => `
+      <article class="real-bill-card operation-summary-card" data-op="${escapeHtml(op.id)}">
+        <div><strong>${escapeHtml(op.category_icon || '🧰')} ${escapeHtml(op.title)}</strong><small>${escapeHtml(op.description || 'Gasto compuesto')} · ${escapeHtml(op.service_month || '')} · ${Number(op.item_count || 0)} ítems internos</small></div>
+        <div class="bill-actions"><b>${money(op.total_amount)}</b><span class="badge ${op.status === 'closed' ? 'settled' : 'open'}">${op.status === 'closed' ? 'Cerrada' : 'Abierta'}</span><button class="tiny-button" data-action="open-op" data-id="${escapeHtml(op.id)}" type="button">Abrir detalle</button></div>
+      </article>
+    `).join('') : '<div class="empty-state">No hay gastos compuestos. Crea una operación para agrupar ítems como reparación lavadora.</div>';
+  }
+}
+
+function renderBillCard(b) {
+  return `
     <article class="real-bill-card" data-bill-id="${escapeHtml(b.id)}">
-      <div><strong>${escapeHtml(b.category_icon || '')} ${escapeHtml(b.title)}</strong><small>${escapeHtml(b.category_name || '')} · corresponde a ${escapeHtml(b.service_month || String(b.bill_date || '').slice(0,7))} · pago/emisión ${escapeHtml(b.bill_date || '')}${b.operation_title ? ' · operación: ' + escapeHtml(b.operation_title) : ''}</small></div>
-      <div><b>${money(b.total_amount)}</b><span class="badge ${b.status === 'paid' ? 'settled' : 'open'}">${labelStatus(b.status)}</span></div>
+      <div><strong>${escapeHtml(b.category_icon || '')} ${escapeHtml(b.title)}</strong><small>${escapeHtml(b.category_name || '')} · mes ${escapeHtml(b.service_month || String(b.bill_date || '').slice(0,7))} · fecha ${escapeHtml(b.bill_date || '')}</small></div>
+      <div class="bill-actions"><b>${money(b.total_amount)}</b><span class="badge ${b.status === 'paid' ? 'settled' : 'open'}">${labelStatus(b.status)}</span></div>
     </article>
-  `).join('') : '<div class="empty-state">Aún no hay cuentas reales cargadas.</div>';
+  `;
 }
 
 function renderCategories(cats) {
@@ -157,6 +203,29 @@ async function saveProfile() {
   }
 }
 
+function netDebtRows(debts) {
+  const names = new Map();
+  const pairs = new Map();
+  (debts || []).forEach((d) => {
+    const debtorId = d.debtor_id || d.id;
+    const receiverId = d.receiver_id || d.owes_to?.id;
+    const amount = Number(d.pending || 0);
+    if (!debtorId || !receiverId || debtorId === receiverId || amount <= 0) return;
+    names.set(debtorId, d.debtor_name || d.name || d.debtor_email || d.email || 'Usuario');
+    names.set(receiverId, d.receiver_name || d.owes_to?.name || d.receiver_email || d.owes_to?.email || 'Usuario');
+    const key = [debtorId, receiverId].sort().join('::');
+    const row = pairs.get(key) || { a: debtorId, b: receiverId, amountAB: 0, amountBA: 0 };
+    if (debtorId === row.a) row.amountAB += amount; else row.amountBA += amount;
+    pairs.set(key, row);
+  });
+  return [...pairs.values()].map((r) => {
+    const net = r.amountAB - r.amountBA;
+    if (net > 0) return { debtor_id: r.a, debtor_name: names.get(r.a), receiver_id: r.b, receiver_name: names.get(r.b), amount: net };
+    if (net < 0) return { debtor_id: r.b, debtor_name: names.get(r.b), receiver_id: r.a, receiver_name: names.get(r.a), amount: Math.abs(net) };
+    return null;
+  }).filter(Boolean).sort((a, b) => b.amount - a.amount);
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('content-type', 'application/json');
@@ -172,7 +241,7 @@ function injectFamilyProStyles() {
   const style = document.createElement('style');
   style.id = 'familyProStyles';
   style.textContent = `
-    .real-bills-list,.category-chip-list{display:grid;gap:10px}.real-bill-card{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.real-bill-card strong{display:block}.real-bill-card small{display:block;margin-top:4px;color:var(--muted)}.real-bill-card b{display:block;text-align:right;margin-bottom:8px}.category-chip-list{display:flex;flex-wrap:wrap;margin-top:14px}.category-chip{border:1px solid var(--line);border-radius:999px;padding:8px 12px;background:rgba(148,163,184,.08);font-weight:800}.profile-dialog{width:min(520px,calc(100vw - 24px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.profile-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.profile-card{position:relative;display:grid;gap:14px;padding:24px}.profile-card h3{margin:0;font-size:1.7rem}.member-mode #view-people .owner-only,.member-mode #categoryPanel,.member-mode .danger-zone{display:none!important}@media(max-width:760px){.real-bill-card{display:grid}.real-bill-card b{text-align:left}.profile-card{padding:22px 16px}}
+    .real-bills-list,.category-chip-list{display:grid;gap:10px}.real-bill-card{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:20px;background:rgba(148,163,184,.08);padding:14px}.real-bill-card strong{display:block}.real-bill-card small{display:block;margin-top:4px;color:var(--muted)}.real-bill-card b{display:block;text-align:right;margin-bottom:8px}.bill-actions{display:grid;gap:8px;justify-items:end}.operation-summary-card{border-color:rgba(56,189,248,.32);background:linear-gradient(135deg,rgba(56,189,248,.12),rgba(167,139,250,.08))}.ledger-section-title{display:flex;justify-content:space-between;align-items:end;margin:18px 0 8px;color:var(--muted);font-size:.88rem}.ledger-section-title span{color:var(--text);font-weight:950}.ledger-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.ledger-stats>div{border:1px solid var(--line);border-radius:18px;background:rgba(15,23,42,.22);padding:12px}.ledger-stats span{display:block;color:var(--muted);font-size:.82rem;font-weight:800}.ledger-stats strong{display:block;margin-top:4px;font-size:1.15rem}.category-chip-list{display:flex;flex-wrap:wrap;margin-top:14px}.category-chip{border:1px solid var(--line);border-radius:999px;padding:8px 12px;background:rgba(148,163,184,.08);font-weight:800}.profile-dialog{width:min(520px,calc(100vw - 24px));border:1px solid var(--line);border-radius:28px;background:var(--panel-strong);color:var(--text);box-shadow:var(--shadow);padding:0}.profile-dialog::backdrop{background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}.profile-card{position:relative;display:grid;gap:14px;padding:24px}.profile-card h3{margin:0;font-size:1.7rem}.member-mode #view-people .owner-only,.member-mode #categoryPanel,.member-mode .danger-zone{display:none!important}@media(max-width:760px){.real-bill-card{display:grid}.real-bill-card b,.bill-actions{text-align:left;justify-items:start}.profile-card{padding:22px 16px}.ledger-stats{grid-template-columns:1fr}}
   `;
   document.head.appendChild(style);
 }
