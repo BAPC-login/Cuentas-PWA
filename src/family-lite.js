@@ -1,3 +1,4 @@
+import './mobile-fix.js';
 import './receipts-review.js';
 
 const API_BASE_FAMILY = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
