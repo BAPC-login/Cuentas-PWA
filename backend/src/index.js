@@ -1,4 +1,4 @@
-import { listCategories, createCategory, listBills, createBill, updateBillStatus, listPayments, createPayment, listReceipts, createReceipt, dashboard } from './family.js';
+import { listCategories, createCategory, listBills, createBill, updateBillStatus, listPayments, createPayment, listReceipts, createReceipt, approveReceipt, rejectReceipt, dashboard } from './family.js';
 
 export default {
   async fetch(request, env) {
@@ -25,6 +25,8 @@ export default {
       if (url.pathname === '/payments' && request.method === 'POST') return createPayment(request, env);
       if (url.pathname === '/receipts' && request.method === 'GET') return listReceipts(request, env);
       if (url.pathname === '/receipts' && request.method === 'POST') return createReceipt(request, env);
+      if (url.pathname.match(/^\/receipts\/[^/]+\/approve$/) && request.method === 'POST') return approveReceipt(request, env);
+      if (url.pathname.match(/^\/receipts\/[^/]+\/reject$/) && request.method === 'POST') return rejectReceipt(request, env);
       if (url.pathname === '/dashboard' && request.method === 'GET') return dashboard(request, env);
       return json({ error: 'not_found', message: 'Ruta no encontrada.' }, env, 404);
     } catch (error) {
