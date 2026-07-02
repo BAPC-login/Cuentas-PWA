@@ -1,10 +1,12 @@
 {
+  "id": "/Cuentas-PWA/",
   "name": "Cuentas Hogar",
   "short_name": "Cuentas",
   "description": "App moderna para llevar cuentas del hogar, deudas entre usuarios y comprobantes.",
   "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
   "orientation": "portrait-primary",
   "background_color": "#07111f",
   "theme_color": "#0f172a",
