@@ -1,15 +1,14 @@
 const STORAGE_KEY = 'cuentas-pwa:v1';
 
 const defaultState = {
-  version: 1,
+  version: 2,
   settings: {
     activeMemberId: 'benjamin',
+    ownerId: 'benjamin',
     theme: 'dark',
   },
   members: [
-    { id: 'benjamin', name: 'Benjamín' },
-    { id: 'maria', name: 'María' },
-    { id: 'iriannys', name: 'Iriannys' },
+    { id: 'benjamin', name: 'Benjamín', role: 'owner', createdAt: new Date().toISOString() },
   ],
   movements: [],
 };
@@ -33,7 +32,10 @@ const elements = {
   movementForm: $('#movementForm'),
   memberForm: $('#memberForm'),
   memberNameInput: $('#memberNameInput'),
+  memberRoleSelect: $('#memberRoleSelect'),
   memberList: $('#memberList'),
+  ownerStatusBadge: $('#ownerStatusBadge'),
+  ownerHelpText: $('#ownerHelpText'),
   relationshipList: $('#relationshipList'),
   recentMovements: $('#recentMovements'),
   allMovements: $('#allMovements'),
@@ -69,23 +71,15 @@ function init() {
 }
 
 function bindEvents() {
-  $$('.nav-tab').forEach((button) => {
-    button.addEventListener('click', () => setView(button.dataset.view));
-  });
-
-  $$('[data-view-shortcut]').forEach((button) => {
-    button.addEventListener('click', () => setView(button.dataset.viewShortcut));
-  });
+  $$('.nav-tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+  $$('[data-view-shortcut]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.viewShortcut)));
 
   elements.quickAddButton.addEventListener('click', () => {
     setView('movements');
     setTimeout(() => elements.amountInput.focus(), 80);
   });
 
-  elements.menuButton.addEventListener('click', () => {
-    document.body.classList.toggle('sidebar-open');
-  });
-
+  elements.menuButton.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
   document.addEventListener('click', (event) => {
     if (document.body.classList.contains('sidebar-open') && !event.target.closest('.sidebar') && !event.target.closest('.menu-button')) {
       document.body.classList.remove('sidebar-open');
@@ -107,7 +101,6 @@ function bindEvents() {
   elements.receiptInput.addEventListener('change', async (event) => {
     const [file] = event.target.files;
     if (!file) return;
-
     try {
       pendingReceipt = await compressImage(file);
       showToast('Comprobante listo para guardar.');
@@ -136,11 +129,9 @@ function bindEvents() {
   elements.exportButton.addEventListener('click', exportData);
   elements.importInput.addEventListener('change', importData);
   elements.resetButton.addEventListener('click', resetData);
-
   elements.allMovements.addEventListener('click', handleMovementAction);
   elements.recentMovements.addEventListener('click', handleMovementAction);
   elements.memberList.addEventListener('click', handleMemberAction);
-
   elements.closeDialog.addEventListener('click', () => elements.receiptDialog.close());
   elements.receiptDialog.addEventListener('click', (event) => {
     if (event.target === elements.receiptDialog) elements.receiptDialog.close();
@@ -150,19 +141,42 @@ function bindEvents() {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return structuredClone(defaultState);
-    const parsed = JSON.parse(raw);
-    return {
-      ...structuredClone(defaultState),
-      ...parsed,
-      settings: { ...defaultState.settings, ...(parsed.settings || {}) },
-      members: Array.isArray(parsed.members) && parsed.members.length ? parsed.members : defaultState.members,
-      movements: Array.isArray(parsed.movements) ? parsed.movements : [],
-    };
+    const base = raw ? JSON.parse(raw) : structuredClone(defaultState);
+    const migrated = migrateState(base);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+    return migrated;
   } catch (error) {
     console.warn('No se pudo cargar el estado local.', error);
     return structuredClone(defaultState);
   }
+}
+
+function migrateState(rawState) {
+  const createdAt = new Date().toISOString();
+  const members = Array.isArray(rawState.members) && rawState.members.length ? rawState.members : defaultState.members;
+  const normalizedMembers = members.map((member, index) => ({
+    id: member.id || slugifyFromList(member.name || `Usuario ${index + 1}`, members),
+    name: member.name || `Usuario ${index + 1}`,
+    role: member.role || (index === 0 ? 'owner' : 'member'),
+    createdAt: member.createdAt || createdAt,
+  }));
+
+  const owner = normalizedMembers.find((member) => member.role === 'owner') || normalizedMembers[0];
+  owner.role = 'owner';
+
+  return {
+    ...structuredClone(defaultState),
+    ...rawState,
+    version: 2,
+    settings: {
+      ...defaultState.settings,
+      ...(rawState.settings || {}),
+      ownerId: rawState.settings?.ownerId || owner.id,
+      activeMemberId: rawState.settings?.activeMemberId || owner.id,
+    },
+    members: normalizedMembers,
+    movements: Array.isArray(rawState.movements) ? rawState.movements : [],
+  };
 }
 
 function saveState() {
@@ -174,12 +188,7 @@ function setView(view) {
   currentView = view;
   $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
   $$('.nav-tab').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  const titles = {
-    dashboard: 'Resumen',
-    movements: 'Movimientos',
-    people: 'Usuarios',
-    backup: 'Respaldo',
-  };
+  const titles = { dashboard: 'Resumen', movements: 'Movimientos', people: 'Usuarios', backup: 'Respaldo' };
   elements.topbarTitle.textContent = titles[view] || 'Cuentas Hogar';
   document.body.classList.remove('sidebar-open');
   if (view === 'backup') updateBackupPreview();
@@ -196,16 +205,19 @@ function render() {
 
 function normalizeActiveMember() {
   const exists = state.members.some((member) => member.id === state.settings.activeMemberId);
-  if (!exists) state.settings.activeMemberId = state.members[0]?.id || null;
+  if (!exists) state.settings.activeMemberId = state.settings.ownerId || state.members[0]?.id || null;
+}
+
+function isOwnerView() {
+  return state.settings.activeMemberId === state.settings.ownerId;
 }
 
 function renderSelects() {
-  const options = state.members.map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+  const options = state.members.map((member) => `<option value="${member.id}">${escapeHtml(member.name)}${member.role === 'owner' ? ' · owner' : ''}</option>`).join('');
   elements.activeMemberSelect.innerHTML = options;
   elements.debtorSelect.innerHTML = options;
   elements.creditorSelect.innerHTML = options;
   elements.activeMemberSelect.value = state.settings.activeMemberId;
-
   elements.debtorSelect.value = state.settings.activeMemberId;
   const firstOther = state.members.find((member) => member.id !== state.settings.activeMemberId) || state.members[0];
   elements.creditorSelect.value = firstOther?.id || '';
@@ -214,12 +226,8 @@ function renderSelects() {
 function renderDashboard() {
   const active = getActiveMember();
   const openMovements = state.movements.filter((movement) => movement.status !== 'settled');
-  const owedToMe = openMovements
-    .filter((movement) => movement.creditorId === active?.id)
-    .reduce((sum, movement) => sum + movement.amount, 0);
-  const iOwe = openMovements
-    .filter((movement) => movement.debtorId === active?.id)
-    .reduce((sum, movement) => sum + movement.amount, 0);
+  const owedToMe = openMovements.filter((movement) => movement.creditorId === active?.id).reduce((sum, movement) => sum + movement.amount, 0);
+  const iOwe = openMovements.filter((movement) => movement.debtorId === active?.id).reduce((sum, movement) => sum + movement.amount, 0);
   const net = owedToMe - iOwe;
 
   elements.netBalance.textContent = formatCurrency(Math.abs(net));
@@ -246,8 +254,7 @@ function renderRelationships() {
     .map((member) => {
       const owesMe = sumOpen((movement) => movement.debtorId === member.id && movement.creditorId === active.id);
       const iOwe = sumOpen((movement) => movement.debtorId === active.id && movement.creditorId === member.id);
-      const net = owesMe - iOwe;
-      return { member, owesMe, iOwe, net };
+      return { member, owesMe, iOwe, net: owesMe - iOwe };
     })
     .filter((row) => row.owesMe > 0 || row.iOwe > 0)
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
@@ -258,9 +265,7 @@ function renderRelationships() {
   }
 
   elements.relationshipList.innerHTML = rows.map((row) => {
-    const text = row.net >= 0
-      ? `${row.member.name} te debe`
-      : `Le debes a ${row.member.name}`;
+    const text = row.net >= 0 ? `${row.member.name} te debe` : `Le debes a ${row.member.name}`;
     return `
       <div class="relationship-card">
         <div>
@@ -268,50 +273,31 @@ function renderRelationships() {
           <span class="muted small">${row.owesMe ? `${row.member.name} → ${active.name}: ${formatCurrency(row.owesMe)}` : ''}${row.owesMe && row.iOwe ? ' · ' : ''}${row.iOwe ? `${active.name} → ${row.member.name}: ${formatCurrency(row.iOwe)}` : ''}</span>
         </div>
         <strong class="${row.net >= 0 ? 'amount-positive' : 'amount-negative'}">${formatCurrency(Math.abs(row.net))}</strong>
-      </div>
-    `;
+      </div>`;
   }).join('');
 }
 
 function renderRecentMovements() {
-  const recent = [...state.movements]
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 5);
-  elements.recentMovements.innerHTML = recent.length
-    ? recent.map(renderMovementCard).join('')
-    : '<div class="empty-state">Registra la primera cuenta para comenzar.</div>';
+  const recent = [...state.movements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
+  elements.recentMovements.innerHTML = recent.length ? recent.map(renderMovementCard).join('') : '<div class="empty-state">Registra la primera cuenta para comenzar.</div>';
 }
 
 function renderMovements() {
   const filtered = [...state.movements]
     .filter((movement) => {
       if (!searchTerm) return true;
-      const haystack = [
-        getMemberName(movement.debtorId),
-        getMemberName(movement.creditorId),
-        movement.note,
-        String(movement.amount),
-        movement.date,
-      ].join(' ').toLowerCase();
+      const haystack = [getMemberName(movement.debtorId), getMemberName(movement.creditorId), movement.note, String(movement.amount), movement.date].join(' ').toLowerCase();
       return haystack.includes(searchTerm);
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-
-  elements.allMovements.innerHTML = filtered.length
-    ? filtered.map(renderMovementCard).join('')
-    : '<div class="empty-state">No hay movimientos con ese filtro.</div>';
+  elements.allMovements.innerHTML = filtered.length ? filtered.map(renderMovementCard).join('') : '<div class="empty-state">No hay movimientos con ese filtro.</div>';
 }
 
 function renderMovementCard(movement) {
   const active = getActiveMember();
   const debtor = getMemberName(movement.debtorId);
   const creditor = getMemberName(movement.creditorId);
-  const title = movement.debtorId === active?.id
-    ? `Le debes a ${creditor}`
-    : movement.creditorId === active?.id
-      ? `${debtor} te debe`
-      : `${debtor} le debe a ${creditor}`;
-
+  const title = movement.debtorId === active?.id ? `Le debes a ${creditor}` : movement.creditorId === active?.id ? `${debtor} te debe` : `${debtor} le debe a ${creditor}`;
   return `
     <article class="movement-card" data-id="${movement.id}">
       <div class="movement-main">
@@ -331,25 +317,38 @@ function renderMovementCard(movement) {
         ${movement.receipt?.dataUrl ? '<button class="tiny-button" data-action="view-receipt" type="button">Ver comprobante</button>' : ''}
         <button class="tiny-button" data-action="delete" type="button">Eliminar</button>
       </div>
-    </article>
-  `;
+    </article>`;
 }
 
 function renderMembers() {
+  const ownerMode = isOwnerView();
+  elements.ownerStatusBadge.textContent = ownerMode ? 'Owner activo' : 'Vista usuario';
+  elements.ownerStatusBadge.className = `badge ${ownerMode ? 'settled' : 'open'}`;
+  elements.ownerHelpText.textContent = ownerMode
+    ? 'Puedes crear usuarios personalizados y eliminar usuarios que ya no participen.'
+    : `Estás mirando como ${getActiveMember()?.name}. Cambia a la vista owner para administrar usuarios.`;
+  elements.memberForm.style.display = ownerMode ? 'grid' : 'none';
+
   elements.memberList.innerHTML = state.members.map((member) => {
     const isActive = member.id === state.settings.activeMemberId;
+    const isOwner = member.id === state.settings.ownerId;
+    const movementCount = state.movements.filter((movement) => movement.debtorId === member.id || movement.creditorId === member.id).length;
+    const canDelete = ownerMode && !isOwner && state.members.length > 1;
     return `
       <article class="member-card" data-id="${member.id}">
         <div class="member-info">
           <div class="avatar">${getInitials(member.name)}</div>
           <div>
             <strong>${escapeHtml(member.name)}</strong>
-            <div class="muted small">${isActive ? 'Vista activa' : 'Usuario disponible'}</div>
+            <div class="movement-meta">
+              <span>${isOwner ? 'Owner' : roleLabel(member.role)}</span>
+              <span>${isActive ? 'Vista activa' : 'Usuario disponible'}</span>
+              <span>${movementCount} movimientos</span>
+            </div>
           </div>
         </div>
-        <button class="tiny-button" data-action="delete-member" ${state.members.length <= 1 ? 'disabled' : ''} type="button">Eliminar</button>
-      </article>
-    `;
+        <button class="tiny-button" data-action="delete-member" ${canDelete ? '' : 'disabled'} type="button">${isOwner ? 'Protegido' : 'Eliminar'}</button>
+      </article>`;
   }).join('');
 }
 
@@ -359,31 +358,10 @@ function addMovement() {
   const amount = parseAmount(elements.amountInput.value);
   const date = elements.dateInput.value;
   const note = elements.noteInput.value.trim();
+  if (!debtorId || !creditorId || debtorId === creditorId) return showToast('Elige dos usuarios distintos.');
+  if (!amount || amount <= 0) return showToast('Ingresa un monto válido.');
 
-  if (!debtorId || !creditorId || debtorId === creditorId) {
-    showToast('Elige dos usuarios distintos.');
-    return;
-  }
-
-  if (!amount || amount <= 0) {
-    showToast('Ingresa un monto válido.');
-    return;
-  }
-
-  const movement = {
-    id: crypto.randomUUID(),
-    debtorId,
-    creditorId,
-    amount,
-    date,
-    note,
-    status: 'open',
-    receipt: pendingReceipt,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  state.movements.push(movement);
+  state.movements.push({ id: crypto.randomUUID(), debtorId, creditorId, amount, date, note, status: 'open', receipt: pendingReceipt, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   pendingReceipt = null;
   elements.receiptInput.value = '';
   elements.amountInput.value = '';
@@ -394,23 +372,22 @@ function addMovement() {
 }
 
 function addMember() {
+  if (!isOwnerView()) return showToast('Solo el owner puede crear usuarios.');
   const name = elements.memberNameInput.value.trim();
-  if (name.length < 2) {
-    showToast('Escribe un nombre válido.');
-    return;
-  }
+  const role = elements.memberRoleSelect?.value || 'member';
+  if (name.length < 2) return showToast('Escribe un nombre válido.');
+  if (state.members.some((member) => member.name.toLowerCase() === name.toLowerCase())) return showToast('Ese usuario ya existe.');
 
-  state.members.push({ id: slugify(name), name });
+  state.members.push({ id: slugify(name), name, role, createdAt: new Date().toISOString() });
   elements.memberNameInput.value = '';
   saveState();
   render();
-  showToast('Usuario agregado.');
+  showToast('Usuario creado.');
 }
 
 function handleMovementAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
-
   const card = button.closest('.movement-card');
   const movement = state.movements.find((item) => item.id === card.dataset.id);
   if (!movement) return;
@@ -421,15 +398,12 @@ function handleMovementAction(event) {
     saveState();
     render();
   }
-
   if (button.dataset.action === 'view-receipt') {
     elements.receiptImage.src = movement.receipt.dataUrl;
     elements.receiptDialog.showModal();
   }
-
   if (button.dataset.action === 'delete') {
-    const ok = confirm('¿Eliminar este movimiento?');
-    if (!ok) return;
+    if (!confirm('¿Eliminar este movimiento?')) return;
     state.movements = state.movements.filter((item) => item.id !== movement.id);
     saveState();
     render();
@@ -440,23 +414,21 @@ function handleMovementAction(event) {
 function handleMemberAction(event) {
   const button = event.target.closest('button[data-action="delete-member"]');
   if (!button) return;
-
+  if (!isOwnerView()) return showToast('Solo el owner puede eliminar usuarios.');
   const card = button.closest('.member-card');
   const member = state.members.find((item) => item.id === card.dataset.id);
   if (!member) return;
+  if (member.id === state.settings.ownerId) return showToast('El owner no se puede eliminar.');
 
   const hasMovements = state.movements.some((movement) => movement.debtorId === member.id || movement.creditorId === member.id);
-  const message = hasMovements
-    ? `Eliminar a ${member.name} también borrará sus movimientos. ¿Continuar?`
-    : `¿Eliminar a ${member.name}?`;
-
+  const message = hasMovements ? `Eliminar a ${member.name} también borrará sus movimientos. ¿Continuar?` : `¿Eliminar a ${member.name}?`;
   if (!confirm(message)) return;
-
   state.members = state.members.filter((item) => item.id !== member.id);
   state.movements = state.movements.filter((movement) => movement.debtorId !== member.id && movement.creditorId !== member.id);
   normalizeActiveMember();
   saveState();
   render();
+  showToast('Usuario eliminado.');
 }
 
 function exportData() {
@@ -474,16 +446,10 @@ function exportData() {
 async function importData(event) {
   const [file] = event.target.files;
   if (!file) return;
-
   try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(await file.text());
     if (!Array.isArray(parsed.members) || !Array.isArray(parsed.movements)) throw new Error('Formato inválido');
-    state = {
-      ...structuredClone(defaultState),
-      ...parsed,
-      settings: { ...defaultState.settings, ...(parsed.settings || {}) },
-    };
+    state = migrateState(parsed);
     saveState();
     render();
     showToast('Respaldo importado.');
@@ -504,15 +470,11 @@ function resetData() {
 }
 
 function updateBackupPreview() {
-  if (!elements.backupPreview) return;
-  elements.backupPreview.value = JSON.stringify(state, null, 2);
+  if (elements.backupPreview) elements.backupPreview.value = JSON.stringify(state, null, 2);
 }
 
 function sumOpen(predicate) {
-  return state.movements
-    .filter((movement) => movement.status !== 'settled')
-    .filter(predicate)
-    .reduce((sum, movement) => sum + movement.amount, 0);
+  return state.movements.filter((movement) => movement.status !== 'settled').filter(predicate).reduce((sum, movement) => sum + movement.amount, 0);
 }
 
 function getActiveMember() {
@@ -523,12 +485,13 @@ function getMemberName(id) {
   return state.members.find((member) => member.id === id)?.name || 'Usuario eliminado';
 }
 
+function roleLabel(role) {
+  const labels = { owner: 'Owner', member: 'Usuario', viewer: 'Solo lectura' };
+  return labels[role] || 'Usuario';
+}
+
 function formatCurrency(value) {
-  return new Intl.NumberFormat('es-CL', {
-    style: 'currency',
-    currency: 'CLP',
-    maximumFractionDigits: 0,
-  }).format(value || 0);
+  return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(value || 0);
 }
 
 function formatDate(value) {
@@ -542,21 +505,11 @@ function parseAmount(value) {
 }
 
 function getInitials(name) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('');
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
 }
 
 function slugify(value) {
-  const base = value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || 'usuario';
+  const base = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'usuario';
   let candidate = base;
   let counter = 2;
   while (state.members.some((member) => member.id === candidate)) {
@@ -566,13 +519,19 @@ function slugify(value) {
   return candidate;
 }
 
+function slugifyFromList(value, list) {
+  const base = String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'usuario';
+  let candidate = base;
+  let counter = 2;
+  while (list.some((member) => member.id === candidate)) {
+    candidate = `${base}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
 function escapeHtml(value = '') {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
 async function compressImage(file) {
@@ -583,15 +542,8 @@ async function compressImage(file) {
   const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
   canvas.width = Math.round(image.width * scale);
   canvas.height = Math.round(image.height * scale);
-  const context = canvas.getContext('2d');
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return {
-    name: file.name,
-    type: 'image/jpeg',
-    size: file.size,
-    dataUrl: canvas.toDataURL('image/jpeg', 0.76),
-    createdAt: new Date().toISOString(),
-  };
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { name: file.name, type: 'image/jpeg', size: file.size, dataUrl: canvas.toDataURL('image/jpeg', 0.76), createdAt: new Date().toISOString() };
 }
 
 function readFileAsDataUrl(file) {
@@ -622,8 +574,6 @@ function showToast(message) {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch((error) => {
-      console.warn('Service worker no registrado.', error);
-    });
+    navigator.serviceWorker.register('./service-worker.js').catch((error) => console.warn('Service worker no registrado.', error));
   });
 }
