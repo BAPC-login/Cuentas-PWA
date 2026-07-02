@@ -1,3 +1,5 @@
+import './receipts-review.js';
+
 const API_BASE_FAMILY = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const SESSION_TOKEN_KEY_FAMILY = 'cuentas-pwa:session-token';
 
