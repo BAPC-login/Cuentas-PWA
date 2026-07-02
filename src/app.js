@@ -1,34 +1,13 @@
-const STORAGE_KEY = 'cuentas-pwa:v1';
+const API_BASE = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
+const STORAGE_KEY = 'cuentas-pwa:v4';
+const TOKEN_KEY = 'cuentas-pwa:session-token';
 
-const defaultState = {
-  version: 3,
-  settings: {
-    activeMemberId: 'benjamin',
-    ownerId: 'benjamin',
-    theme: 'dark',
-  },
-  session: {
-    userId: 'benjamin',
-    startedAt: new Date().toISOString(),
-  },
-  members: [
-    {
-      id: 'benjamin',
-      name: 'Benjamín',
-      email: 'owner@cuentas.local',
-      role: 'owner',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      activatedAt: new Date().toISOString(),
-    },
-  ],
-  movements: [],
-};
-
+let token = localStorage.getItem(TOKEN_KEY) || '';
+let sessionUser = null;
+let pendingEmail = '';
 let state = loadState();
-let pendingReceipt = null;
-let currentView = 'dashboard';
 let searchTerm = '';
+let pendingReceipt = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -74,159 +53,28 @@ const elements = {
 
 init();
 
-function init() {
+async function init() {
+  injectAuthGate();
   injectSessionControls();
   injectEmailField();
   elements.dateInput.valueAsDate = new Date();
   document.body.classList.toggle('light', state.settings.theme === 'light');
   bindEvents();
-  ensureValidSession();
-  render();
+  await bootstrapAuth();
   registerServiceWorker();
-}
-
-function injectSessionControls() {
-  const sidebarCard = document.querySelector('.sidebar-card');
-  if (!sidebarCard || $('#sessionActions')) return;
-  const wrapper = document.createElement('div');
-  wrapper.id = 'sessionActions';
-  wrapper.className = 'button-row session-actions';
-  wrapper.innerHTML = '<button class="ghost-button" id="logoutButton" type="button">Logout</button>';
-  sidebarCard.appendChild(wrapper);
-}
-
-function injectEmailField() {
-  if (!elements.memberForm || $('#memberEmailInput')) return;
-  const emailLabel = document.createElement('label');
-  emailLabel.className = 'field';
-  emailLabel.innerHTML = '<span>Correo del usuario</span><input id="memberEmailInput" type="email" placeholder="usuario@correo.com" autocomplete="off" />';
-  elements.memberForm.insertBefore(emailLabel, elements.memberForm.firstChild);
-
-  const nameLabel = elements.memberNameInput?.closest('.field');
-  if (nameLabel) {
-    nameLabel.querySelector('span').textContent = 'Nombre visible opcional';
-    elements.memberNameInput.placeholder = 'Lo puede completar al ingresar';
-  }
-
-  const submit = elements.memberForm.querySelector('button[type="submit"]');
-  if (submit) submit.textContent = 'Crear invitación';
-}
-
-function bindEvents() {
-  $$('.nav-tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
-  $$('[data-view-shortcut]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.viewShortcut)));
-
-  elements.quickAddButton.addEventListener('click', () => {
-    setView('movements');
-    setTimeout(() => elements.amountInput.focus(), 80);
-  });
-
-  $('#logoutButton')?.addEventListener('click', logout);
-  elements.menuButton.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
-  document.addEventListener('click', (event) => {
-    if (document.body.classList.contains('sidebar-open') && !event.target.closest('.sidebar') && !event.target.closest('.menu-button')) {
-      document.body.classList.remove('sidebar-open');
-    }
-  });
-
-  elements.activeMemberSelect.addEventListener('change', (event) => {
-    state.settings.activeMemberId = event.target.value;
-    saveState();
-    render();
-  });
-
-  elements.themeToggle.addEventListener('click', () => {
-    state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
-    document.body.classList.toggle('light', state.settings.theme === 'light');
-    saveState();
-  });
-
-  elements.receiptInput.addEventListener('change', async (event) => {
-    const [file] = event.target.files;
-    if (!file) return;
-    try {
-      pendingReceipt = await compressImage(file);
-      showToast('Comprobante listo para guardar.');
-    } catch (error) {
-      console.error(error);
-      showToast('No pude procesar esa imagen. Prueba con otra.');
-      elements.receiptInput.value = '';
-    }
-  });
-
-  elements.movementForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    addMovement();
-  });
-
-  elements.memberForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    addMember();
-  });
-
-  elements.searchInput.addEventListener('input', (event) => {
-    searchTerm = event.target.value.trim().toLowerCase();
-    renderMovements();
-  });
-
-  elements.exportButton.addEventListener('click', exportData);
-  elements.importInput.addEventListener('change', importData);
-  elements.resetButton.addEventListener('click', resetData);
-  elements.allMovements.addEventListener('click', handleMovementAction);
-  elements.recentMovements.addEventListener('click', handleMovementAction);
-  elements.memberList.addEventListener('click', handleMemberAction);
-  elements.closeDialog.addEventListener('click', () => elements.receiptDialog.close());
-  elements.receiptDialog.addEventListener('click', (event) => {
-    if (event.target === elements.receiptDialog) elements.receiptDialog.close();
-  });
 }
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const base = raw ? JSON.parse(raw) : structuredClone(defaultState);
-    const migrated = migrateState(base);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-    return migrated;
-  } catch (error) {
-    console.warn('No se pudo cargar el estado local.', error);
-    return structuredClone(defaultState);
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    return {
+      settings: { activeMemberId: raw.settings?.activeMemberId || '', theme: raw.settings?.theme || 'dark' },
+      members: Array.isArray(raw.members) ? raw.members : [],
+      movements: Array.isArray(raw.movements) ? raw.movements : [],
+    };
+  } catch {
+    return { settings: { activeMemberId: '', theme: 'dark' }, members: [], movements: [] };
   }
-}
-
-function migrateState(rawState) {
-  const createdAt = new Date().toISOString();
-  const rawMembers = Array.isArray(rawState.members) && rawState.members.length ? rawState.members : defaultState.members;
-  const normalizedMembers = rawMembers.map((member, index) => ({
-    id: member.id || slugifyFromList(member.name || member.email || `usuario-${index + 1}`, rawMembers),
-    name: member.name || '',
-    email: normalizeEmail(member.email || (index === 0 ? 'owner@cuentas.local' : `${member.id || `usuario${index + 1}`}@pendiente.local`)),
-    role: member.role || (index === 0 ? 'owner' : 'member'),
-    status: member.status || 'active',
-    createdAt: member.createdAt || createdAt,
-    activatedAt: member.activatedAt || (member.name ? createdAt : null),
-    revokedAt: member.revokedAt || null,
-  }));
-
-  const owner = normalizedMembers.find((member) => member.role === 'owner') || normalizedMembers[0];
-  owner.role = 'owner';
-  owner.status = 'active';
-  if (!owner.name) owner.name = 'Benjamín';
-
-  return {
-    ...structuredClone(defaultState),
-    ...rawState,
-    version: 3,
-    settings: {
-      ...defaultState.settings,
-      ...(rawState.settings || {}),
-      ownerId: rawState.settings?.ownerId || owner.id,
-      activeMemberId: rawState.settings?.activeMemberId || owner.id,
-    },
-    session: rawState.session || { userId: owner.id, startedAt: createdAt },
-    members: normalizedMembers,
-    movements: Array.isArray(rawState.movements) ? rawState.movements : [],
-  };
 }
 
 function saveState() {
@@ -234,37 +82,181 @@ function saveState() {
   updateBackupPreview();
 }
 
-function ensureValidSession() {
-  const sessionUser = getSessionUser();
-  if (!sessionUser || sessionUser.status === 'revoked') {
-    state.session = { userId: state.settings.ownerId, startedAt: new Date().toISOString() };
+async function api(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set('content-type', 'application/json');
+  if (token) headers.set('authorization', ['Bearer', token].join(' '));
+  const response = await fetch(API_BASE + path, { ...options, headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || 'api_error');
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
-  const active = getSessionUser();
-  if (!isOwnerSession()) state.settings.activeMemberId = active?.id;
+  return data;
+}
+
+async function bootstrapAuth() {
+  if (!token) {
+    showLogin();
+    return;
+  }
+  try {
+    const data = await api('/me');
+    sessionUser = normalizeRemoteUser(data.user);
+    hideLogin();
+    await refreshRemoteUsers();
+    render();
+  } catch {
+    token = '';
+    localStorage.removeItem(TOKEN_KEY);
+    showLogin();
+  }
+}
+
+function injectAuthGate() {
+  if ($('#authGate')) return;
+  const styles = document.createElement('style');
+  styles.textContent = `.auth-gate{position:fixed;inset:0;z-index:200;display:none;place-items:center;padding:18px;background:rgba(2,6,23,.92);backdrop-filter:blur(18px)}.auth-gate.active{display:grid}.auth-card{width:min(520px,100%);padding:28px;border:1px solid var(--line);border-radius:var(--radius-xl);background:var(--panel-strong);box-shadow:var(--shadow)}.auth-step{display:none;gap:16px}.auth-step.active{display:grid}.auth-note{margin-top:14px;padding:12px;border-radius:16px;background:rgba(56,189,248,.1);color:var(--muted)}body.auth-required .app-shell{filter:blur(10px);pointer-events:none;user-select:none}.session-actions{margin-top:12px}.member-card.revoked{opacity:.55}`;
+  document.head.appendChild(styles);
+  const gate = document.createElement('section');
+  gate.className = 'auth-gate';
+  gate.id = 'authGate';
+  gate.innerHTML = `<div class="auth-card"><div class="brand auth-brand"><div class="brand-mark">↔</div><div><p class="eyebrow">Cuentas Hogar</p><h1>Ingreso por correo</h1></div></div><div class="auth-step active" id="authEmailStep"><p class="muted">Ingresa tu correo. La sesión queda abierta hasta logout o revocación del owner.</p><form id="emailLoginForm" class="form-stack"><label class="field"><span>Correo</span><input id="loginEmailInput" type="email" placeholder="tu-correo@dominio.com" required></label><button class="primary-button full" type="submit">Enviar código</button></form></div><div class="auth-step" id="authCodeStep"><p class="muted" id="codeHelpText">Ingresa el código temporal.</p><form id="codeLoginForm" class="form-stack"><label class="field"><span>Código</span><input id="loginCodeInput" inputmode="numeric" maxlength="6" required></label><label class="field"><span>Nombre si es primera vez</span><input id="profileNameInput" placeholder="Tu nombre visible"></label><button class="primary-button full" type="submit">Entrar</button><button class="ghost-button full" id="backToEmailButton" type="button">Cambiar correo</button></form></div><div class="auth-note" id="authNote">Modo demo: el código se muestra aquí hasta conectar envío real por correo.</div></div>`;
+  document.body.appendChild(gate);
+}
+
+function showLogin() {
+  document.body.classList.add('auth-required');
+  $('#authGate').classList.add('active');
+}
+
+function hideLogin() {
+  document.body.classList.remove('auth-required');
+  $('#authGate').classList.remove('active');
+}
+
+function bindEvents() {
+  $('#emailLoginForm')?.addEventListener('submit', requestCode);
+  $('#codeLoginForm')?.addEventListener('submit', verifyCode);
+  $('#backToEmailButton')?.addEventListener('click', () => setAuthStep('email'));
+  $$('.nav-tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+  $$('[data-view-shortcut]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.viewShortcut)));
+  elements.quickAddButton.addEventListener('click', () => { setView('movements'); setTimeout(() => elements.amountInput.focus(), 80); });
+  $('#logoutButton')?.addEventListener('click', logout);
+  elements.menuButton.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+  elements.activeMemberSelect.addEventListener('change', (event) => { state.settings.activeMemberId = event.target.value; saveState(); render(); });
+  elements.themeToggle.addEventListener('click', () => { state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark'; document.body.classList.toggle('light', state.settings.theme === 'light'); saveState(); });
+  elements.movementForm.addEventListener('submit', (event) => { event.preventDefault(); addMovement(); });
+  elements.memberForm.addEventListener('submit', (event) => { event.preventDefault(); addMember(); });
+  elements.searchInput.addEventListener('input', (event) => { searchTerm = event.target.value.trim().toLowerCase(); renderMovements(); });
+  elements.exportButton.addEventListener('click', exportData);
+  elements.importInput.addEventListener('change', importData);
+  elements.resetButton.addEventListener('click', resetData);
+  elements.allMovements.addEventListener('click', handleMovementAction);
+  elements.recentMovements.addEventListener('click', handleMovementAction);
+  elements.memberList.addEventListener('click', handleMemberAction);
+  elements.closeDialog.addEventListener('click', () => elements.receiptDialog.close());
+  elements.receiptDialog.addEventListener('click', (event) => { if (event.target === elements.receiptDialog) elements.receiptDialog.close(); });
+  elements.receiptInput.addEventListener('change', async (event) => { const [file] = event.target.files; if (!file) return; pendingReceipt = await compressImage(file); showToast('Comprobante listo para guardar.'); });
+}
+
+function injectSessionControls() {
+  const card = document.querySelector('.sidebar-card');
+  if (!card || $('#logoutButton')) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'button-row session-actions';
+  wrapper.innerHTML = '<button class="ghost-button" id="logoutButton" type="button">Logout</button>';
+  card.appendChild(wrapper);
+}
+
+function injectEmailField() {
+  if (!elements.memberForm || $('#memberEmailInput')) return;
+  const label = document.createElement('label');
+  label.className = 'field';
+  label.innerHTML = '<span>Correo del usuario</span><input id="memberEmailInput" type="email" placeholder="usuario@correo.com" autocomplete="off">';
+  elements.memberForm.insertBefore(label, elements.memberForm.firstChild);
+  const nameLabel = elements.memberNameInput.closest('.field');
+  if (nameLabel) nameLabel.querySelector('span').textContent = 'Nombre visible opcional';
+  const submit = elements.memberForm.querySelector('button[type="submit"]');
+  if (submit) submit.textContent = 'Crear invitación';
+}
+
+async function requestCode(event) {
+  event.preventDefault();
+  pendingEmail = $('#loginEmailInput').value.trim().toLowerCase();
+  $('#authNote').textContent = 'Generando código...';
+  try {
+    const data = await api('/auth/request-code', { method: 'POST', body: JSON.stringify({ email: pendingEmail }) });
+    $('#codeHelpText').textContent = `Código demo: ${data.demo_code}`;
+    $('#authNote').textContent = 'Código generado. En producción llegará por correo.';
+    setAuthStep('code');
+  } catch (error) {
+    $('#authNote').textContent = error.status === 403 ? 'Ese correo no tiene acceso. Pídele al owner que lo cree.' : `Error: ${error.message}`;
+  }
+}
+
+async function verifyCode(event) {
+  event.preventDefault();
+  $('#authNote').textContent = 'Validando sesión...';
+  try {
+    const data = await api('/auth/verify-code', { method: 'POST', body: JSON.stringify({ email: pendingEmail, code: $('#loginCodeInput').value, name: $('#profileNameInput').value }) });
+    token = data.session.token;
+    localStorage.setItem(TOKEN_KEY, token);
+    sessionUser = normalizeRemoteUser(data.user);
+    hideLogin();
+    await refreshRemoteUsers();
+    render();
+    showToast('Sesión iniciada.');
+  } catch (error) {
+    $('#authNote').textContent = error.status === 409 ? 'Completa tu nombre para activar el usuario.' : `No se pudo entrar: ${error.message}`;
+  }
+}
+
+function setAuthStep(step) {
+  $('#authEmailStep').classList.toggle('active', step === 'email');
+  $('#authCodeStep').classList.toggle('active', step === 'code');
+}
+
+async function refreshRemoteUsers() {
+  if (!sessionUser) return;
+  if (sessionUser.role === 'owner') {
+    try {
+      const data = await api('/owner/users');
+      state.members = data.users.map(normalizeRemoteUser);
+    } catch {
+      state.members = [sessionUser];
+    }
+  } else {
+    state.members = [sessionUser];
+  }
+  if (!state.settings.activeMemberId || !state.members.some((m) => m.id === state.settings.activeMemberId)) state.settings.activeMemberId = sessionUser.id;
+  if (sessionUser.role !== 'owner') state.settings.activeMemberId = sessionUser.id;
   saveState();
 }
 
-function logout() {
-  const owner = state.members.find((member) => member.id === state.settings.ownerId);
-  state.session = { userId: owner?.id || state.members[0]?.id, startedAt: new Date().toISOString() };
-  state.settings.activeMemberId = state.session.userId;
-  saveState();
-  render();
-  showToast('Sesión cerrada. En demo vuelve al owner.');
+function normalizeRemoteUser(user) {
+  return { id: user.id, email: user.email, name: user.name || '', role: user.role, status: user.status, createdAt: user.created_at, activatedAt: user.activated_at, revokedAt: user.revoked_at };
+}
+
+async function logout() {
+  try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch {}
+  token = '';
+  sessionUser = null;
+  localStorage.removeItem(TOKEN_KEY);
+  showLogin();
+  showToast('Sesión cerrada.');
 }
 
 function setView(view) {
-  currentView = view;
   $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
   $$('.nav-tab').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  const titles = { dashboard: 'Resumen', movements: 'Movimientos', people: 'Usuarios', backup: 'Respaldo' };
-  elements.topbarTitle.textContent = titles[view] || 'Cuentas Hogar';
-  document.body.classList.remove('sidebar-open');
+  elements.topbarTitle.textContent = ({ dashboard: 'Resumen', movements: 'Movimientos', people: 'Usuarios', backup: 'Respaldo' })[view] || 'Cuentas Hogar';
   if (view === 'backup') updateBackupPreview();
 }
 
 function render() {
-  normalizeActiveMember();
   renderSession();
   renderSelects();
   renderDashboard();
@@ -273,402 +265,80 @@ function render() {
   updateBackupPreview();
 }
 
-function normalizeActiveMember() {
-  const exists = state.members.some((member) => member.id === state.settings.activeMemberId && member.status !== 'revoked');
-  if (!exists) state.settings.activeMemberId = getSessionUser()?.id || state.settings.ownerId || state.members[0]?.id || null;
-  if (!isOwnerSession()) state.settings.activeMemberId = getSessionUser()?.id;
-}
-
-function isOwnerSession() {
-  return state.session?.userId === state.settings.ownerId;
-}
-
-function isOwnerView() {
-  return isOwnerSession();
-}
-
 function renderSession() {
-  const sessionUser = getSessionUser();
-  const sessionName = $('#sessionName');
-  const sessionEmail = $('#sessionEmail');
-  const sessionHelpText = $('#sessionHelpText');
-  if (sessionName) sessionName.textContent = sessionUser?.name || 'Usuario pendiente';
-  if (sessionEmail) sessionEmail.textContent = sessionUser?.email || 'sin correo';
-  if (sessionHelpText) sessionHelpText.textContent = isOwnerSession()
-    ? 'Sesión owner abierta. Puedes cambiar la vista y administrar usuarios.'
-    : 'Tu sesión queda abierta hasta logout o revocación.';
+  const card = document.querySelector('.sidebar-card');
+  if (!card) return;
+  const helper = card.querySelector('.muted.small');
+  if (helper) helper.textContent = sessionUser ? `${displayName(sessionUser)} · ${sessionUser.email}` : 'Sin sesión';
 }
 
 function renderSelects() {
-  const visibleMembers = state.members.filter((member) => member.status !== 'revoked');
-  const options = visibleMembers.map((member) => `<option value="${member.id}">${escapeHtml(displayName(member))}${member.role === 'owner' ? ' · owner' : ''}</option>`).join('');
+  const visible = state.members.filter((m) => m.status !== 'revoked');
+  const options = visible.map((m) => `<option value="${m.id}">${escapeHtml(displayName(m))}${m.role === 'owner' ? ' · owner' : ''}</option>`).join('');
   elements.activeMemberSelect.innerHTML = options;
   elements.debtorSelect.innerHTML = options;
   elements.creditorSelect.innerHTML = options;
   elements.activeMemberSelect.value = state.settings.activeMemberId;
-  elements.activeMemberSelect.disabled = !isOwnerSession();
+  elements.activeMemberSelect.disabled = sessionUser?.role !== 'owner';
   elements.debtorSelect.value = state.settings.activeMemberId;
-  const firstOther = visibleMembers.find((member) => member.id !== state.settings.activeMemberId) || visibleMembers[0];
-  elements.creditorSelect.value = firstOther?.id || '';
+  elements.creditorSelect.value = visible.find((m) => m.id !== state.settings.activeMemberId)?.id || '';
 }
 
 function renderDashboard() {
   const active = getActiveMember();
-  const openMovements = state.movements.filter((movement) => movement.status !== 'settled');
-  const owedToMe = openMovements.filter((movement) => movement.creditorId === active?.id).reduce((sum, movement) => sum + movement.amount, 0);
-  const iOwe = openMovements.filter((movement) => movement.debtorId === active?.id).reduce((sum, movement) => sum + movement.amount, 0);
+  const open = state.movements.filter((m) => m.status !== 'settled');
+  const owedToMe = open.filter((m) => m.creditorId === active?.id).reduce((s, m) => s + m.amount, 0);
+  const iOwe = open.filter((m) => m.debtorId === active?.id).reduce((s, m) => s + m.amount, 0);
   const net = owedToMe - iOwe;
-
   elements.netBalance.textContent = formatCurrency(Math.abs(net));
   elements.netBalance.className = net >= 0 ? 'amount-positive' : 'amount-negative';
-  elements.balanceHint.textContent = net > 0
-    ? `A ${displayName(active)} le deben más de lo que debe.`
-    : net < 0
-      ? `${displayName(active)} debe más de lo que le deben.`
-      : 'Cuentas equilibradas para esta vista.';
-
+  elements.balanceHint.textContent = net === 0 ? 'Cuentas equilibradas para esta vista.' : net > 0 ? `A ${displayName(active)} le deben más de lo que debe.` : `${displayName(active)} debe más de lo que le deben.`;
   elements.activePerspectiveTitle.textContent = `Vista de ${displayName(active)}`;
   elements.owedToMe.textContent = formatCurrency(owedToMe);
   elements.iOwe.textContent = formatCurrency(iOwe);
-  elements.receiptCount.textContent = String(state.movements.filter((movement) => movement.receipt?.dataUrl).length);
+  elements.receiptCount.textContent = state.movements.filter((m) => m.receipt?.dataUrl).length;
   renderRelationships();
   renderRecentMovements();
 }
 
 function renderRelationships() {
   const active = getActiveMember();
-  const rows = state.members
-    .filter((member) => member.id !== active?.id && member.status !== 'revoked')
-    .map((member) => {
-      const owesMe = sumOpen((movement) => movement.debtorId === member.id && movement.creditorId === active.id);
-      const iOwe = sumOpen((movement) => movement.debtorId === active.id && movement.creditorId === member.id);
-      return { member, owesMe, iOwe, net: owesMe - iOwe };
-    })
-    .filter((row) => row.owesMe > 0 || row.iOwe > 0)
-    .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
-
-  if (!rows.length) {
-    elements.relationshipList.innerHTML = '<div class="empty-state">No hay cuentas pendientes entre usuarios.</div>';
-    return;
-  }
-
-  elements.relationshipList.innerHTML = rows.map((row) => {
-    const text = row.net >= 0 ? `${displayName(row.member)} te debe` : `Le debes a ${displayName(row.member)}`;
-    return `<div class="relationship-card"><div><strong>${escapeHtml(text)}</strong><span class="muted small">${row.owesMe ? `${displayName(row.member)} → ${displayName(active)}: ${formatCurrency(row.owesMe)}` : ''}${row.owesMe && row.iOwe ? ' · ' : ''}${row.iOwe ? `${displayName(active)} → ${displayName(row.member)}: ${formatCurrency(row.iOwe)}` : ''}</span></div><strong class="${row.net >= 0 ? 'amount-positive' : 'amount-negative'}">${formatCurrency(Math.abs(row.net))}</strong></div>`;
-  }).join('');
+  const rows = state.members.filter((m) => m.id !== active?.id && m.status !== 'revoked').map((m) => ({ member: m, owesMe: sumOpen((x) => x.debtorId === m.id && x.creditorId === active.id), iOwe: sumOpen((x) => x.debtorId === active.id && x.creditorId === m.id) })).filter((r) => r.owesMe || r.iOwe);
+  elements.relationshipList.innerHTML = rows.length ? rows.map((r) => { const net = r.owesMe - r.iOwe; return `<div class="relationship-card"><div><strong>${escapeHtml(net >= 0 ? `${displayName(r.member)} te debe` : `Le debes a ${displayName(r.member)}`)}</strong></div><strong>${formatCurrency(Math.abs(net))}</strong></div>`; }).join('') : '<div class="empty-state">No hay cuentas pendientes entre usuarios.</div>';
 }
 
-function renderRecentMovements() {
-  const recent = [...state.movements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
-  elements.recentMovements.innerHTML = recent.length ? recent.map(renderMovementCard).join('') : '<div class="empty-state">Registra la primera cuenta para comenzar.</div>';
-}
-
-function renderMovements() {
-  const filtered = [...state.movements]
-    .filter((movement) => {
-      if (!searchTerm) return true;
-      const haystack = [getMemberName(movement.debtorId), getMemberName(movement.creditorId), movement.note, String(movement.amount), movement.date].join(' ').toLowerCase();
-      return haystack.includes(searchTerm);
-    })
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  elements.allMovements.innerHTML = filtered.length ? filtered.map(renderMovementCard).join('') : '<div class="empty-state">No hay movimientos con ese filtro.</div>';
-}
-
-function renderMovementCard(movement) {
-  const active = getActiveMember();
-  const debtor = getMemberName(movement.debtorId);
-  const creditor = getMemberName(movement.creditorId);
-  const title = movement.debtorId === active?.id ? `Le debes a ${creditor}` : movement.creditorId === active?.id ? `${debtor} te debe` : `${debtor} le debe a ${creditor}`;
-  return `<article class="movement-card" data-id="${movement.id}"><div class="movement-main"><div><p class="movement-title">${escapeHtml(title)}</p><div class="movement-meta"><span>${formatDate(movement.date)}</span><span>${escapeHtml(movement.note || 'Sin detalle')}</span>${movement.receipt?.dataUrl ? '<span>Con comprobante</span>' : ''}</div></div><strong class="${movement.status === 'settled' ? 'amount-positive' : 'amount-negative'}">${formatCurrency(movement.amount)}</strong></div><div class="movement-actions"><span class="badge ${movement.status === 'settled' ? 'settled' : 'open'}">${movement.status === 'settled' ? 'Pagada' : 'Pendiente'}</span><button class="tiny-button" data-action="toggle-status" type="button">${movement.status === 'settled' ? 'Marcar pendiente' : 'Marcar pagada'}</button>${movement.receipt?.dataUrl ? '<button class="tiny-button" data-action="view-receipt" type="button">Ver comprobante</button>' : ''}<button class="tiny-button" data-action="delete" type="button">Eliminar</button></div></article>`;
-}
+function renderRecentMovements() { elements.recentMovements.innerHTML = state.movements.slice(-5).reverse().map(renderMovementCard).join('') || '<div class="empty-state">Registra la primera cuenta para comenzar.</div>'; }
+function renderMovements() { const items = state.movements.filter((m) => !searchTerm || `${getMemberName(m.debtorId)} ${getMemberName(m.creditorId)} ${m.note} ${m.amount}`.toLowerCase().includes(searchTerm)); elements.allMovements.innerHTML = items.slice().reverse().map(renderMovementCard).join('') || '<div class="empty-state">No hay movimientos con ese filtro.</div>'; }
+function renderMovementCard(m) { const active = getActiveMember(); const debtor = getMemberName(m.debtorId); const creditor = getMemberName(m.creditorId); const title = m.debtorId === active?.id ? `Le debes a ${creditor}` : m.creditorId === active?.id ? `${debtor} te debe` : `${debtor} le debe a ${creditor}`; return `<article class="movement-card" data-id="${m.id}"><div class="movement-main"><div><p class="movement-title">${escapeHtml(title)}</p><div class="movement-meta"><span>${formatDate(m.date)}</span><span>${escapeHtml(m.note || 'Sin detalle')}</span></div></div><strong>${formatCurrency(m.amount)}</strong></div><div class="movement-actions"><span class="badge ${m.status === 'settled' ? 'settled' : 'open'}">${m.status === 'settled' ? 'Pagada' : 'Pendiente'}</span><button class="tiny-button" data-action="toggle-status">${m.status === 'settled' ? 'Marcar pendiente' : 'Marcar pagada'}</button>${m.receipt?.dataUrl ? '<button class="tiny-button" data-action="view-receipt">Ver comprobante</button>' : ''}<button class="tiny-button" data-action="delete">Eliminar</button></div></article>`; }
 
 function renderMembers() {
-  const ownerMode = isOwnerView();
-  elements.ownerStatusBadge.textContent = ownerMode ? 'Owner activo' : 'Vista usuario';
-  elements.ownerStatusBadge.className = `badge ${ownerMode ? 'settled' : 'open'}`;
-  elements.ownerHelpText.textContent = ownerMode
-    ? 'Crea usuarios por correo. La cuenta queda pendiente hasta que el usuario complete su nombre.'
-    : `Estás mirando como ${displayName(getSessionUser())}. Solo el owner administra usuarios.`;
-  elements.memberForm.style.display = ownerMode ? 'grid' : 'none';
-
-  elements.memberList.innerHTML = state.members.map((member) => {
-    const isActive = member.id === state.settings.activeMemberId;
-    const isOwner = member.id === state.settings.ownerId;
-    const movementCount = state.movements.filter((movement) => movement.debtorId === member.id || movement.creditorId === member.id).length;
-    const statusClass = member.status === 'revoked' ? 'revoked' : member.status === 'pending' ? 'pending' : 'settled';
-    const canRevoke = ownerMode && !isOwner && member.status !== 'revoked';
-    const canReactivate = ownerMode && !isOwner && member.status === 'revoked';
-    const canDelete = ownerMode && !isOwner;
-    return `<article class="member-card ${escapeHtml(member.status)}" data-id="${member.id}"><div class="member-info"><div class="avatar">${getInitials(displayName(member))}</div><div><strong>${escapeHtml(displayName(member))}</strong><div class="movement-meta"><span>${escapeHtml(member.email)}</span><span>${roleLabel(member.role)}</span><span>${isActive ? 'Vista activa' : statusLabel(member.status)}</span><span>${movementCount} movimientos</span></div></div></div><div class="movement-actions"><span class="badge ${statusClass}">${statusLabel(member.status)}</span>${canRevoke ? '<button class="tiny-button" data-action="revoke-member" type="button">Revocar</button>' : ''}${canReactivate ? '<button class="tiny-button" data-action="reactivate-member" type="button">Reactivar</button>' : ''}<button class="tiny-button" data-action="delete-member" ${canDelete ? '' : 'disabled'} type="button">${isOwner ? 'Protegido' : 'Eliminar'}</button></div></article>`;
-  }).join('');
+  const owner = sessionUser?.role === 'owner';
+  elements.ownerStatusBadge.textContent = owner ? 'Owner activo' : 'Usuario';
+  elements.ownerHelpText.textContent = owner ? 'Crea usuarios por correo en la base real.' : 'Solo el owner administra usuarios.';
+  elements.memberForm.style.display = owner ? 'grid' : 'none';
+  elements.memberList.innerHTML = state.members.map((m) => `<article class="member-card ${m.status}" data-id="${m.id}"><div class="member-info"><div class="avatar">${getInitials(displayName(m))}</div><div><strong>${escapeHtml(displayName(m))}</strong><div class="movement-meta"><span>${escapeHtml(m.email)}</span><span>${roleLabel(m.role)}</span><span>${statusLabel(m.status)}</span></div></div></div><div class="movement-actions">${owner && m.role !== 'owner' && m.status !== 'revoked' ? '<button class="tiny-button" data-action="revoke-member">Revocar</button>' : ''}${owner && m.role !== 'owner' && m.status === 'revoked' ? '<button class="tiny-button" data-action="reactivate-member">Reactivar</button>' : ''}</div></article>`).join('');
 }
 
-function addMovement() {
-  const debtorId = elements.debtorSelect.value;
-  const creditorId = elements.creditorSelect.value;
-  const amount = parseAmount(elements.amountInput.value);
-  const date = elements.dateInput.value;
-  const note = elements.noteInput.value.trim();
-  if (!debtorId || !creditorId || debtorId === creditorId) return showToast('Elige dos usuarios distintos.');
-  if (!amount || amount <= 0) return showToast('Ingresa un monto válido.');
-  state.movements.push({ id: crypto.randomUUID(), debtorId, creditorId, amount, date, note, status: 'open', receipt: pendingReceipt, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-  pendingReceipt = null;
-  elements.receiptInput.value = '';
-  elements.amountInput.value = '';
-  elements.noteInput.value = '';
-  saveState();
-  render();
-  showToast('Movimiento guardado.');
-}
+function addMovement() { const debtorId = elements.debtorSelect.value; const creditorId = elements.creditorSelect.value; const amount = parseAmount(elements.amountInput.value); if (!debtorId || !creditorId || debtorId === creditorId) return showToast('Elige dos usuarios distintos.'); if (!amount) return showToast('Ingresa un monto válido.'); state.movements.push({ id: crypto.randomUUID(), debtorId, creditorId, amount, date: elements.dateInput.value, note: elements.noteInput.value.trim(), status: 'open', receipt: pendingReceipt, createdAt: new Date().toISOString() }); pendingReceipt = null; elements.amountInput.value = ''; elements.noteInput.value = ''; saveState(); render(); showToast('Movimiento guardado localmente.'); }
+async function addMember() { if (sessionUser?.role !== 'owner') return showToast('Solo el owner puede crear usuarios.'); const email = $('#memberEmailInput').value.trim().toLowerCase(); const name = elements.memberNameInput.value.trim(); const role = elements.memberRoleSelect.value; try { await api('/owner/users', { method: 'POST', body: JSON.stringify({ email, name, role }) }); $('#memberEmailInput').value = ''; elements.memberNameInput.value = ''; await refreshRemoteUsers(); render(); showToast('Usuario creado en D1.'); } catch (e) { showToast(`No se pudo crear: ${e.message}`); } }
+async function handleMemberAction(event) { const button = event.target.closest('button[data-action]'); if (!button) return; const id = button.closest('.member-card').dataset.id; const endpoint = button.dataset.action === 'revoke-member' ? `/owner/users/${id}/revoke` : `/owner/users/${id}/reactivate`; try { await api(endpoint, { method: 'PATCH', body: '{}' }); await refreshRemoteUsers(); render(); } catch (e) { showToast(`Error: ${e.message}`); } }
+function handleMovementAction(event) { const button = event.target.closest('button[data-action]'); if (!button) return; const id = button.closest('.movement-card').dataset.id; const m = state.movements.find((x) => x.id === id); if (!m) return; if (button.dataset.action === 'toggle-status') m.status = m.status === 'settled' ? 'open' : 'settled'; if (button.dataset.action === 'delete') state.movements = state.movements.filter((x) => x.id !== id); if (button.dataset.action === 'view-receipt') { elements.receiptImage.src = m.receipt.dataUrl; elements.receiptDialog.showModal(); } saveState(); render(); }
 
-function addMember() {
-  if (!isOwnerView()) return showToast('Solo el owner puede crear usuarios.');
-  const emailInput = $('#memberEmailInput');
-  const email = normalizeEmail(emailInput?.value || '');
-  const name = elements.memberNameInput.value.trim();
-  const role = elements.memberRoleSelect?.value || 'member';
-  if (!isValidEmail(email)) return showToast('Ingresa un correo válido.');
-  if (state.members.some((member) => member.email === email)) return showToast('Ese correo ya existe.');
-  state.members.push({ id: slugify(email.split('@')[0]), email, name, role, status: name ? 'active' : 'pending', createdAt: new Date().toISOString(), activatedAt: name ? new Date().toISOString() : null, revokedAt: null });
-  if (emailInput) emailInput.value = '';
-  elements.memberNameInput.value = '';
-  saveState();
-  render();
-  showToast('Usuario creado. En la próxima etapa recibirá acceso por correo.');
-}
-
-function handleMovementAction(event) {
-  const button = event.target.closest('button[data-action]');
-  if (!button) return;
-  const card = button.closest('.movement-card');
-  const movement = state.movements.find((item) => item.id === card.dataset.id);
-  if (!movement) return;
-  if (button.dataset.action === 'toggle-status') {
-    movement.status = movement.status === 'settled' ? 'open' : 'settled';
-    movement.updatedAt = new Date().toISOString();
-    saveState();
-    render();
-  }
-  if (button.dataset.action === 'view-receipt') {
-    elements.receiptImage.src = movement.receipt.dataUrl;
-    elements.receiptDialog.showModal();
-  }
-  if (button.dataset.action === 'delete') {
-    if (!confirm('¿Eliminar este movimiento?')) return;
-    state.movements = state.movements.filter((item) => item.id !== movement.id);
-    saveState();
-    render();
-    showToast('Movimiento eliminado.');
-  }
-}
-
-function handleMemberAction(event) {
-  const button = event.target.closest('button[data-action]');
-  if (!button || !button.closest('.member-card')) return;
-  if (!isOwnerView()) return showToast('Solo el owner puede administrar usuarios.');
-  const card = button.closest('.member-card');
-  const member = state.members.find((item) => item.id === card.dataset.id);
-  if (!member) return;
-  if (member.id === state.settings.ownerId) return showToast('El owner no se puede modificar desde aquí.');
-
-  if (button.dataset.action === 'revoke-member') {
-    member.status = 'revoked';
-    member.revokedAt = new Date().toISOString();
-    if (state.session?.userId === member.id) state.session = { userId: state.settings.ownerId, startedAt: new Date().toISOString() };
-    saveState();
-    render();
-    showToast('Acceso revocado.');
-    return;
-  }
-
-  if (button.dataset.action === 'reactivate-member') {
-    member.status = member.name ? 'active' : 'pending';
-    member.revokedAt = null;
-    saveState();
-    render();
-    showToast('Usuario reactivado.');
-    return;
-  }
-
-  if (button.dataset.action === 'delete-member') {
-    const hasMovements = state.movements.some((movement) => movement.debtorId === member.id || movement.creditorId === member.id);
-    const message = hasMovements ? `Eliminar a ${displayName(member)} también borrará sus movimientos. ¿Continuar?` : `¿Eliminar a ${displayName(member)}?`;
-    if (!confirm(message)) return;
-    state.members = state.members.filter((item) => item.id !== member.id);
-    state.movements = state.movements.filter((movement) => movement.debtorId !== member.id && movement.creditorId !== member.id);
-    normalizeActiveMember();
-    saveState();
-    render();
-    showToast('Usuario eliminado.');
-  }
-}
-
-function exportData() {
-  const payload = JSON.stringify(state, null, 2);
-  const blob = new Blob([payload], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `cuentas-hogar-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  showToast('Respaldo descargado.');
-}
-
-async function importData(event) {
-  const [file] = event.target.files;
-  if (!file) return;
-  try {
-    const parsed = JSON.parse(await file.text());
-    if (!Array.isArray(parsed.members) || !Array.isArray(parsed.movements)) throw new Error('Formato inválido');
-    state = migrateState(parsed);
-    saveState();
-    render();
-    showToast('Respaldo importado.');
-  } catch (error) {
-    console.error(error);
-    showToast('Ese archivo no parece un respaldo válido.');
-  } finally {
-    elements.importInput.value = '';
-  }
-}
-
-function resetData() {
-  if (!confirm('¿Borrar todos los datos locales y volver al inicio?')) return;
-  state = structuredClone(defaultState);
-  saveState();
-  render();
-  showToast('Datos reiniciados.');
-}
-
-function updateBackupPreview() {
-  if (elements.backupPreview) elements.backupPreview.value = JSON.stringify(state, null, 2);
-}
-
-function sumOpen(predicate) {
-  return state.movements.filter((movement) => movement.status !== 'settled').filter(predicate).reduce((sum, movement) => sum + movement.amount, 0);
-}
-
-function getSessionUser() {
-  return state.members.find((member) => member.id === state.session?.userId);
-}
-
-function getActiveMember() {
-  return state.members.find((member) => member.id === state.settings.activeMemberId) || getSessionUser() || state.members[0];
-}
-
-function getMemberName(id) {
-  const member = state.members.find((item) => item.id === id);
-  return member ? displayName(member) : 'Usuario eliminado';
-}
-
-function displayName(member) {
-  if (!member) return 'Usuario';
-  return member.name || member.email || 'Usuario pendiente';
-}
-
-function roleLabel(role) {
-  const labels = { owner: 'Owner', member: 'Usuario', viewer: 'Solo lectura' };
-  return labels[role] || 'Usuario';
-}
-
-function statusLabel(status) {
-  const labels = { active: 'Activo', pending: 'Pendiente', revoked: 'Revocado' };
-  return labels[status] || 'Activo';
-}
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(value || 0);
-}
-
-function formatDate(value) {
-  if (!value) return 'Sin fecha';
-  const [year, month, day] = value.split('-').map(Number);
-  return new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(year, month - 1, day));
-}
-
-function parseAmount(value) {
-  return Number(String(value).replace(/[^0-9]/g, ''));
-}
-
-function getInitials(name) {
-  return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'U';
-}
-
-function slugify(value) {
-  const base = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'usuario';
-  let candidate = base;
-  let counter = 2;
-  while (state.members.some((member) => member.id === candidate)) {
-    candidate = `${base}-${counter}`;
-    counter += 1;
-  }
-  return candidate;
-}
-
-function slugifyFromList(value, list) {
-  const base = String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'usuario';
-  let candidate = base;
-  let counter = 2;
-  while (list.some((member) => member.id === candidate)) {
-    candidate = `${base}-${counter}`;
-    counter += 1;
-  }
-  return candidate;
-}
-
-function escapeHtml(value = '') {
-  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-}
-
-async function compressImage(file) {
-  const dataUrl = await readFileAsDataUrl(file);
-  const image = await loadImage(dataUrl);
-  const canvas = document.createElement('canvas');
-  const maxSize = 1200;
-  const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
-  canvas.width = Math.round(image.width * scale);
-  canvas.height = Math.round(image.height * scale);
-  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-  return { name: file.name, type: 'image/jpeg', size: file.size, dataUrl: canvas.toDataURL('image/jpeg', 0.76), createdAt: new Date().toISOString() };
-}
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}
-
-function showToast(message) {
-  elements.toast.textContent = message;
-  elements.toast.classList.add('show');
-  clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => elements.toast.classList.remove('show'), 2400);
-}
-
-function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch((error) => console.warn('Service worker no registrado.', error));
-  });
-}
+function exportData() { const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cuentas-hogar.json'; a.click(); URL.revokeObjectURL(a.href); }
+async function importData(event) { const [file] = event.target.files; if (!file) return; state = JSON.parse(await file.text()); saveState(); render(); }
+function resetData() { if (!confirm('¿Borrar movimientos locales?')) return; state.movements = []; saveState(); render(); }
+function updateBackupPreview() { if (elements.backupPreview) elements.backupPreview.value = JSON.stringify(state, null, 2); }
+function sumOpen(predicate) { return state.movements.filter((m) => m.status !== 'settled').filter(predicate).reduce((s, m) => s + m.amount, 0); }
+function getActiveMember() { return state.members.find((m) => m.id === state.settings.activeMemberId) || sessionUser || state.members[0]; }
+function getMemberName(id) { return displayName(state.members.find((m) => m.id === id)); }
+function displayName(member) { return member?.name || member?.email || 'Usuario'; }
+function roleLabel(role) { return ({ owner: 'Owner', member: 'Usuario', viewer: 'Solo lectura' })[role] || 'Usuario'; }
+function statusLabel(status) { return ({ active: 'Activo', pending: 'Pendiente', revoked: 'Revocado' })[status] || 'Activo'; }
+function parseAmount(value) { return Number(String(value).replace(/[^0-9]/g, '')); }
+function formatCurrency(value) { return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(value || 0); }
+function formatDate(value) { return value || 'Sin fecha'; }
+function getInitials(name) { return String(name).split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || 'U'; }
+function escapeHtml(value = '') { return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
+async function compressImage(file) { const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); }); return { name: file.name, dataUrl, createdAt: new Date().toISOString() }; }
+function showToast(message) { elements.toast.textContent = message; elements.toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => elements.toast.classList.remove('show'), 2400); }
+function registerServiceWorker() { if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn)); }
