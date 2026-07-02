@@ -19,15 +19,16 @@ function injectExpenseForm() {
   if (!movements || document.querySelector('#expenseEntryPanel')) return;
   movements.insertAdjacentHTML('afterbegin', `
     <article class="panel" id="expenseEntryPanel">
-      <div class="panel-header"><div><p class="eyebrow">Carga rápida</p><h3>Subir gasto real</h3></div></div>
-      <p class="muted small">Cualquier usuario autorizado puede subir gastos. El owner puede indicar quién pagó para que el balance quede correcto.</p>
+      <div class="panel-header"><div><p class="eyebrow">Carga express</p><h3>Subir gasto común</h3></div></div>
+      <p class="muted small">Registra quién pagó y entre quiénes se divide. Si pertenece a una operación, selecciónala para que el libro la agrupe.</p>
       <form id="expenseEntryForm" class="form-stack">
         <div class="form-row"><label class="field"><span>Gasto</span><input id="expenseTitle" placeholder="Ej: Mano de obra técnico lavadora" required></label><label class="field"><span>Categoría</span><select id="expenseCategory" required></select></label></div>
         <div class="form-row"><label class="field"><span>Monto</span><input id="expenseAmount" inputmode="numeric" placeholder="30000" required></label><label class="field"><span>Pagó</span><select id="expensePaidBy" required></select></label></div>
         <div class="form-row"><label class="field"><span>Fecha del gasto</span><input id="expenseDate" type="date" required></label><label class="field"><span>Corresponde al mes de</span><input id="expenseMonth" type="month" required></label></div>
+        <label class="field"><span>Operación / gasto compuesto</span><select id="expenseOperation"><option value="">Gasto simple, sin operación</option></select></label>
         <label class="field"><span>Descripción</span><input id="expenseDescription" placeholder="Detalle opcional"></label>
-        <div class="participant-editor"><strong>Participantes</strong><div class="split-mode"><label><input type="radio" name="expenseSplitMode" value="equal" checked>Partes iguales</label><label><input type="radio" name="expenseSplitMode" value="manual">Montos específicos</label></div><div class="split-note">Marca participantes. En partes iguales no debes poner valores.</div><div id="expenseParticipants"></div></div>
-        <button class="primary-button full" type="submit">Guardar gasto real</button>
+        <div class="participant-editor"><strong>Se divide entre</strong><div class="split-mode"><label><input type="radio" name="expenseSplitMode" value="equal" checked>Partes iguales</label><label><input type="radio" name="expenseSplitMode" value="manual">Montos específicos</label></div><div class="split-note">Marca participantes. En partes iguales no debes poner valores.</div><div id="expenseParticipants"></div></div>
+        <button class="primary-button full" type="submit">Guardar gasto común</button>
       </form>
     </article>
   `);
@@ -56,10 +57,12 @@ async function hydrateExpenseEntry() {
   }
 }
 
-function renderExpenseOptions(cats) {
+function renderExpenseOptions(cats, ops = []) {
   const cat = document.querySelector('#expenseCategory');
   const paidBy = document.querySelector('#expensePaidBy');
+  const op = document.querySelector('#expenseOperation');
   if (cat) cat.innerHTML = cats.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.icon || '')} ${escapeHtml(c.name)}</option>`).join('');
+  if (op) op.innerHTML = '<option value="">Gasto simple, sin operación</option>' + ops.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join('');
   if (paidBy) {
     const me = window.__expenseMe;
     const users = window.__expenseUsers || [];
@@ -81,7 +84,8 @@ function enhanceBillCards() {
   document.querySelectorAll('.real-bill-card[data-bill-id]').forEach((card) => {
     const id = card.dataset.billId;
     if (!id || card.querySelector('[data-action="delete-bill"]')) return;
-    card.insertAdjacentHTML('beforeend', `<button class="tiny-button danger-mini" data-action="delete-bill" data-id="${escapeHtml(id)}" type="button">Eliminar gasto</button>`);
+    const actions = card.querySelector('.bill-actions') || card;
+    actions.insertAdjacentHTML('beforeend', `<button class="tiny-button danger-mini" data-action="delete-bill" data-id="${escapeHtml(id)}" type="button">Eliminar gasto</button>`);
   });
 }
 
@@ -100,6 +104,7 @@ async function submitExpense(event) {
       paid_by_user_id: document.querySelector('#expensePaidBy').value,
       bill_date: document.querySelector('#expenseDate').value,
       service_month: document.querySelector('#expenseMonth').value,
+      operation_id: document.querySelector('#expenseOperation').value || null,
       description: document.querySelector('#expenseDescription').value.trim(),
       participants,
     }) });
@@ -124,7 +129,7 @@ async function handleExpenseActions(event) {
     showAppToast('Gasto eliminado.');
     window.dispatchEvent(new Event('family-data-changed'));
   } catch (error) {
-    showAppToast(error.message || 'No se pudo eliminar.', 'error');
+    showAppToast(error.message || 'No se pudo eliminar. Si el mes está cerrado, reábrelo primero.', 'error');
   }
 }
 
@@ -152,7 +157,7 @@ function splitExpenseEven(force = true) {
   });
 }
 
-function splitValues(ids, amount) { const base = Math.floor(amount / ids.length); return ids.map((id, index) => [id, index === ids.length - 1 ? amount - base * (ids.length - 1) : base]); }
+function splitValues(ids, amount) { if (!ids.length) return []; const base = Math.floor(amount / ids.length); return ids.map((id, index) => [id, index === ids.length - 1 ? amount - base * (ids.length - 1) : base]); }
 async function api(path, options = {}) { const headers = new Headers(options.headers || {}); headers.set('content-type', 'application/json'); headers.set('authorization', 'Bearer ' + localStorage.getItem(TOKEN_EXPENSE)); const res = await fetch(API_EXPENSE + path, { ...options, headers }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.message || data.error || 'Error API'); return data; }
 function amountValue(selector) { return Number(String(document.querySelector(selector)?.value || '').replace(/[^0-9]/g, '')); }
 function injectStyles() { if (document.querySelector('#expenseEntryStyles')) return; const style = document.createElement('style'); style.id = 'expenseEntryStyles'; style.textContent = `#expenseEntryPanel{border-color:rgba(56,189,248,.25)}#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr 130px}.danger-mini{background:rgba(248,113,113,.12)!important;border-color:rgba(248,113,113,.36)!important}@media(max-width:760px){#expenseEntryPanel .participant-row{grid-template-columns:auto 1fr}#expenseEntryPanel .participant-row input[type="number"]{grid-column:2;width:100%}}`; document.head.appendChild(style); }
