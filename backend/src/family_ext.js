@@ -51,28 +51,89 @@ export async function deleteBillExtended(request, env) {
 export async function listDebtsDetailed(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
-  const { results } = await env.DB.prepare(`
+  const { results: details } = await env.DB.prepare(`
     SELECT
+      b.id AS bill_id,
+      b.title AS bill_title,
+      b.description AS bill_description,
+      b.total_amount AS bill_total_amount,
+      b.bill_date,
+      COALESCE(b.service_month, substr(b.bill_date, 1, 7)) AS service_month,
+      b.status AS bill_status,
+      c.id AS category_id,
+      c.name AS category_name,
+      c.icon AS category_icon,
+      o.id AS operation_id,
+      o.title AS operation_title,
       debtor.id AS debtor_id,
       debtor.name AS debtor_name,
       debtor.email AS debtor_email,
       receiver.id AS receiver_id,
       receiver.name AS receiver_name,
       receiver.email AS receiver_email,
-      SUM(bp.share_amount) AS total_assigned,
-      SUM(bp.paid_amount) AS total_paid,
-      SUM(bp.share_amount - bp.paid_amount) AS pending
+      bp.share_amount AS total_assigned,
+      bp.paid_amount AS total_paid,
+      (bp.share_amount - bp.paid_amount) AS pending
     FROM bill_participants bp
     JOIN bills b ON b.id = bp.bill_id
+    JOIN categories c ON c.id = b.category_id
+    LEFT JOIN operations o ON o.id = b.operation_id
     JOIN users debtor ON debtor.id = bp.user_id
     LEFT JOIN users receiver ON receiver.id = COALESCE(b.paid_by_user_id, b.created_by)
     WHERE b.status != 'cancelled'
       AND (bp.share_amount - bp.paid_amount) > 0
       AND debtor.id != COALESCE(b.paid_by_user_id, b.created_by)
-    GROUP BY debtor.id, debtor.name, debtor.email, receiver.id, receiver.name, receiver.email
-    ORDER BY pending DESC
+    ORDER BY COALESCE(b.service_month, substr(b.bill_date, 1, 7)) DESC, b.bill_date DESC, b.created_at DESC
   `).all();
-  return json({ debts: results }, env);
+
+  const debts = aggregateDebtDetails(details);
+  const netSummary = calculateNetSummary(details);
+  return json({ debts, details, net_summary: netSummary }, env);
+}
+
+function aggregateDebtDetails(details) {
+  const map = new Map();
+  for (const row of details || []) {
+    const key = `${row.debtor_id}::${row.receiver_id}`;
+    const current = map.get(key) || {
+      debtor_id: row.debtor_id,
+      debtor_name: row.debtor_name,
+      debtor_email: row.debtor_email,
+      receiver_id: row.receiver_id,
+      receiver_name: row.receiver_name,
+      receiver_email: row.receiver_email,
+      total_assigned: 0,
+      total_paid: 0,
+      pending: 0,
+    };
+    current.total_assigned += Number(row.total_assigned || 0);
+    current.total_paid += Number(row.total_paid || 0);
+    current.pending += Number(row.pending || 0);
+    map.set(key, current);
+  }
+  return [...map.values()].sort((a, b) => b.pending - a.pending);
+}
+
+function calculateNetSummary(details) {
+  const names = new Map();
+  const pairs = new Map();
+  for (const row of details || []) {
+    const amount = Number(row.pending || 0);
+    if (!row.debtor_id || !row.receiver_id || row.debtor_id === row.receiver_id || amount <= 0) continue;
+    names.set(row.debtor_id, row.debtor_name || row.debtor_email || 'Usuario');
+    names.set(row.receiver_id, row.receiver_name || row.receiver_email || 'Usuario');
+    const key = [row.debtor_id, row.receiver_id].sort().join('::');
+    const current = pairs.get(key) || { a: row.debtor_id, b: row.receiver_id, amountAB: 0, amountBA: 0 };
+    if (row.debtor_id === current.a) current.amountAB += amount;
+    else current.amountBA += amount;
+    pairs.set(key, current);
+  }
+  return [...pairs.values()].map((pair) => {
+    const net = pair.amountAB - pair.amountBA;
+    if (net > 0) return { debtor_id: pair.a, debtor_name: names.get(pair.a), receiver_id: pair.b, receiver_name: names.get(pair.b), amount: net };
+    if (net < 0) return { debtor_id: pair.b, debtor_name: names.get(pair.b), receiver_id: pair.a, receiver_name: names.get(pair.a), amount: Math.abs(net) };
+    return null;
+  }).filter(Boolean).sort((a, b) => b.amount - a.amount);
 }
 
 async function createBillRecord(env, user, body) {
