@@ -1,6 +1,7 @@
 import './mobile-fix.js';
 import './receipts-review.js';
 import './family-pro.js';
+import './debts-ops.js';
 
 const API_BASE_FAMILY = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const SESSION_TOKEN_KEY_FAMILY = 'cuentas-pwa:session-token';
