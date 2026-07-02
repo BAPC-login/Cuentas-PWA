@@ -1,0 +1,15 @@
+name = "cuentas-pwa-api"
+main = "backend/src/index.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+APP_ORIGIN = "https://bapc-login.github.io"
+OWNER_EMAIL = "benjaminpalma16@gmail.com"
+SESSION_DAYS = "3650"
+CODE_TTL_MINUTES = "10"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cuentas-pwa-db"
+database_id = "4d83d1ff-355c-4fde-af95-6252f8b5014a"
+migrations_dir = "backend/migrations"
