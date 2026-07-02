@@ -1,6 +1,8 @@
+import { showAppToast } from './ui-feedback.js';
+
 const API_FAMILY_PRO = 'https://cuentas-pwa-api.botreservasmultilocal.workers.dev';
 const TOKEN_FAMILY_PRO = 'cuentas-pwa:session-token';
-const CATEGORY_ICONS = ['🏠','💡','💧','🔥','🛒','🧾','🔧','🧺','🚗','📱','🌐','🐶','💊','🎁','🏷️'];
+const CATEGORY_ICONS = ['🏠','🏡','🏢','💡','💧','🔥','🧯','⛽','🛢️','🛒','🥩','🍞','🍽️','🧾','💳','💸','🔧','🛠️','🪛','🧰','🧺','🚗','🚙','🛞','🔋','🅿️','📱','☎️','🌐','📺','💻','🎧','🔐','📦','🚚','🐶','🐱','💊','🏥','🦷','🎓','🎁','🎬','🎮','🎵','📚','✈️','🏖️','👕','👟','🧼','🧽','🧹','🌱','🏷️'];
 
 setTimeout(initFamilyPro, 1500);
 window.addEventListener('family-data-changed', () => refreshFamilyPro());
@@ -34,7 +36,7 @@ function injectCategoryPanel() {
       <div class="panel-header"><div><p class="eyebrow">Categorías</p><h3>Categorías personalizadas</h3></div></div>
       <form id="categoryForm" class="form-stack">
         <div class="form-row">
-          <label class="field"><span>Nombre</span><input id="categoryNameInput" placeholder="Ej: Arriendo, Gastos comunes, Medicamentos"></label>
+          <label class="field"><span>Nombre</span><input id="categoryNameInput" placeholder="Ej: Arriendo, Reparación, Auto, Suscripciones"></label>
           <label class="field"><span>Icono</span><select id="categoryIconInput">${CATEGORY_ICONS.map(i => `<option value="${i}">${i}</option>`).join('')}</select></label>
         </div>
         <button class="secondary-button" type="submit">Crear categoría</button>
@@ -117,14 +119,20 @@ function renderCategories(cats) {
 
 async function createCategory(event) {
   event.preventDefault();
+  const form = document.querySelector('#categoryForm');
   const name = document.querySelector('#categoryNameInput').value.trim();
   const icon = document.querySelector('#categoryIconInput').value || '🏷️';
-  if (!name) return;
-  await api('/categories', { method: 'POST', body: JSON.stringify({ name, icon, kind: 'expense' }) });
-  document.querySelector('#categoryNameInput').value = '';
-  document.querySelector('#categoryIconInput').value = '🏷️';
-  await refreshFamilyPro();
-  window.dispatchEvent(new Event('family-data-changed'));
+  if (!name) return showAppToast('Escribe un nombre de categoría.', 'error');
+  try {
+    await api('/categories', { method: 'POST', body: JSON.stringify({ name, icon, kind: 'expense' }) });
+    form.reset();
+    document.querySelector('#categoryIconInput').value = '🏷️';
+    await refreshFamilyPro();
+    showAppToast('Categoría creada.');
+    window.dispatchEvent(new Event('family-data-changed'));
+  } catch (error) {
+    showAppToast(error.message || 'No se pudo crear la categoría.', 'error');
+  }
 }
 
 function openProfileDialog() {
@@ -138,10 +146,15 @@ function openProfileDialog() {
 async function saveProfile() {
   const name = document.querySelector('#profileNameEdit').value.trim();
   const avatar_url = document.querySelector('#profileAvatarEdit').value.trim();
-  if (name.length < 2) return alert('Pon tu nombre visible.');
-  await api('/me/profile', { method: 'PATCH', body: JSON.stringify({ name, avatar_url }) });
-  document.querySelector('#profileDialog')?.close();
-  await refreshFamilyPro();
+  if (name.length < 2) return showAppToast('Pon tu nombre visible.', 'error');
+  try {
+    await api('/me/profile', { method: 'PATCH', body: JSON.stringify({ name, avatar_url }) });
+    document.querySelector('#profileDialog')?.close();
+    showAppToast('Perfil actualizado.');
+    await refreshFamilyPro();
+  } catch (error) {
+    showAppToast(error.message || 'No se pudo guardar el perfil.', 'error');
+  }
 }
 
 async function api(path, options = {}) {
