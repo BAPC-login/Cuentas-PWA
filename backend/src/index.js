@@ -16,7 +16,7 @@ export default {
       return json({ error: 'not_found' }, env, 404);
     } catch (error) {
       console.error(error);
-      return json({ error: 'server_error' }, env, 500);
+      return json({ error: 'server_error', detail: String(error?.message || error) }, env, 500);
     }
   },
 };
@@ -38,8 +38,39 @@ async function requestCode(request, env) {
     .bind(id, normalizedEmail, codeDigest, expiresAt)
     .run();
 
-  // Demo: se devuelve el codigo. En produccion se debe enviar por email y no devolverlo.
-  return json({ ok: true, demo_code: code, expires_at: expiresAt }, env);
+  if (env.RESEND_API_KEY) {
+    await sendLoginCodeEmail(env, normalizedEmail, code);
+    return json({ ok: true, email_sent: true, expires_at: expiresAt }, env);
+  }
+
+  return json({ ok: true, demo_code: code, email_sent: false, expires_at: expiresAt }, env);
+}
+
+async function sendLoginCodeEmail(env, to, code) {
+  const from = env.RESEND_FROM || 'Cuentas Hogar <onboarding@resend.dev>';
+  const subject = 'Tu codigo de acceso a Cuentas Hogar';
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.5;">
+      <h2>Tu codigo de acceso</h2>
+      <p>Usa este codigo para entrar a Cuentas Hogar:</p>
+      <div style="font-size: 32px; font-weight: 800; letter-spacing: 6px; padding: 16px 20px; background: #f1f5f9; border-radius: 12px; width: fit-content;">${code}</div>
+      <p>Este codigo vence en ${env.CODE_TTL_MINUTES || 10} minutos.</p>
+      <p>Si no pediste este acceso, puedes ignorar este correo.</p>
+    </div>`;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ from, to, subject, html }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`resend_error: ${detail}`);
+  }
 }
 
 async function verifyCode(request, env) {
@@ -130,7 +161,7 @@ async function ensureOwner(env) {
   if (existing) return existing;
   const id = crypto.randomUUID();
   await env.DB.prepare('INSERT INTO users (id, email, name, role, status, activated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, ownerEmail, 'Benjamín', 'owner', 'active', new Date().toISOString())
+    .bind(id, ownerEmail, 'Benjamin', 'owner', 'active', new Date().toISOString())
     .run();
   return getUserById(env, id);
 }
