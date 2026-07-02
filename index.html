@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="description" content="PWA moderna para llevar cuentas del hogar, deudas entre usuarios y comprobantes de pago." />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./assets/icon.svg" />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <title>Cuentas Hogar</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navegación principal">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">↔</div>
+          <div>
+            <p class="eyebrow">Cuentas PWA</p>
+            <h1>Cuentas Hogar</h1>
+          </div>
+        </div>
+
+        <nav class="nav-tabs" aria-label="Secciones">
+          <button class="nav-tab active" data-view="dashboard" type="button">Resumen</button>
+          <button class="nav-tab" data-view="movements" type="button">Movimientos</button>
+          <button class="nav-tab" data-view="people" type="button">Usuarios</button>
+          <button class="nav-tab" data-view="backup" type="button">Respaldo</button>
+        </nav>
+
+        <section class="sidebar-card">
+          <p class="eyebrow">Vista actual</p>
+          <label class="field compact">
+            <span>Usuario</span>
+            <select id="activeMemberSelect"></select>
+          </label>
+          <p class="muted small">Todo se calcula desde el usuario seleccionado. Así “María te debe” cambia automáticamente en la vista de María.</p>
+        </section>
+
+        <button class="ghost-button" id="themeToggle" type="button">Cambiar tema</button>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <button class="menu-button" id="menuButton" aria-label="Abrir menú" type="button">☰</button>
+          <div>
+            <p class="eyebrow">Panel personal</p>
+            <h2 id="topbarTitle">Resumen</h2>
+          </div>
+          <button class="primary-button" id="quickAddButton" type="button">+ Cuenta</button>
+        </header>
+
+        <section class="hero-card">
+          <div>
+            <p class="eyebrow">Balance del hogar</p>
+            <h3 id="netBalance">$0</h3>
+            <p class="muted" id="balanceHint">Sin movimientos pendientes todavía.</p>
+          </div>
+          <div class="hero-actions">
+            <button class="secondary-button" data-view-shortcut="movements" type="button">Registrar movimiento</button>
+            <button class="ghost-button" data-view-shortcut="backup" type="button">Exportar datos</button>
+          </div>
+        </section>
+
+        <section class="view active" id="view-dashboard">
+          <div class="grid two-columns">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Pendientes</p>
+                  <h3>Quién le debe a quién</h3>
+                </div>
+              </div>
+              <div id="relationshipList" class="stack"></div>
+            </article>
+
+            <article class="panel accent-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Tu vista</p>
+                  <h3 id="activePerspectiveTitle">Mis cuentas</h3>
+                </div>
+              </div>
+              <div class="summary-grid">
+                <div class="summary-card">
+                  <span>Te deben</span>
+                  <strong id="owedToMe">$0</strong>
+                </div>
+                <div class="summary-card">
+                  <span>Debes</span>
+                  <strong id="iOwe">$0</strong>
+                </div>
+                <div class="summary-card wide">
+                  <span>Comprobantes guardados</span>
+                  <strong id="receiptCount">0</strong>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Actividad reciente</p>
+                <h3>Últimos movimientos</h3>
+              </div>
+              <button class="text-button" data-view-shortcut="movements" type="button">Ver todo</button>
+            </div>
+            <div id="recentMovements" class="movement-list"></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-movements">
+          <div class="grid form-layout">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Nueva cuenta</p>
+                  <h3>Registrar deuda o pago</h3>
+                </div>
+              </div>
+
+              <form id="movementForm" class="form-stack">
+                <div class="form-row">
+                  <label class="field">
+                    <span>Quién debe</span>
+                    <select id="debtorSelect" required></select>
+                  </label>
+                  <label class="field">
+                    <span>A quién le debe</span>
+                    <select id="creditorSelect" required></select>
+                  </label>
+                </div>
+
+                <div class="form-row">
+                  <label class="field">
+                    <span>Monto</span>
+                    <input id="amountInput" inputmode="numeric" autocomplete="off" placeholder="50000" required />
+                  </label>
+                  <label class="field">
+                    <span>Fecha</span>
+                    <input id="dateInput" type="date" required />
+                  </label>
+                </div>
+
+                <label class="field">
+                  <span>Detalle</span>
+                  <input id="noteInput" placeholder="Ej: supermercado, arriendo, transferencia, gas" maxlength="90" />
+                </label>
+
+                <label class="upload-box" for="receiptInput">
+                  <input id="receiptInput" type="file" accept="image/*" />
+                  <span class="upload-icon">📎</span>
+                  <strong>Agregar comprobante</strong>
+                  <small>Se guarda localmente comprimido. Después conectaremos lectura automática.</small>
+                </label>
+
+                <button class="primary-button full" type="submit">Guardar movimiento</button>
+              </form>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Movimientos</p>
+                  <h3>Historial</h3>
+                </div>
+                <label class="field compact search-field">
+                  <span>Buscar</span>
+                  <input id="searchInput" placeholder="nombre, nota o monto" />
+                </label>
+              </div>
+              <div id="allMovements" class="movement-list large"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-people">
+          <div class="grid two-columns">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Usuarios</p>
+                  <h3>Integrantes</h3>
+                </div>
+              </div>
+              <form id="memberForm" class="inline-form">
+                <input id="memberNameInput" placeholder="Nombre nuevo" maxlength="40" />
+                <button class="secondary-button" type="submit">Agregar</button>
+              </form>
+              <div id="memberList" class="member-list"></div>
+            </article>
+
+            <article class="panel glass-note">
+              <p class="eyebrow">Siguiente etapa</p>
+              <h3>Usuarios reales y sincronización</h3>
+              <p>Esta primera versión funciona como PWA offline. El próximo salto es conectar una base compartida para que Benjamín, María e Iriannys vean la misma información desde sus teléfonos.</p>
+              <ul class="check-list">
+                <li>Login simple por usuario.</li>
+                <li>Sincronización con Sheets, Supabase o Firebase.</li>
+                <li>Lectura de comprobantes con IA/OCR.</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-backup">
+          <div class="grid two-columns">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Respaldo</p>
+                  <h3>Exportar / importar</h3>
+                </div>
+              </div>
+              <p class="muted">Mientras no conectemos base de datos, este respaldo es la forma segura de mover tus cuentas entre dispositivos.</p>
+              <div class="button-row">
+                <button class="primary-button" id="exportButton" type="button">Descargar JSON</button>
+                <label class="secondary-button file-button" for="importInput">Importar JSON</label>
+                <input id="importInput" class="hidden-input" type="file" accept="application/json" />
+              </div>
+              <textarea id="backupPreview" readonly aria-label="Vista previa del respaldo"></textarea>
+            </article>
+
+            <article class="panel danger-zone">
+              <p class="eyebrow">Zona segura</p>
+              <h3>Reiniciar datos</h3>
+              <p>Esto borra solo los datos guardados en este navegador. No toca GitHub ni futuras bases externas.</p>
+              <button class="danger-button" id="resetButton" type="button">Borrar datos locales</button>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="receiptDialog">
+      <button class="dialog-close" id="closeDialog" aria-label="Cerrar" type="button">×</button>
+      <img id="receiptImage" alt="Comprobante guardado" />
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="./src/app.js" type="module"></script>
+  </body>
+</html>
