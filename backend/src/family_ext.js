@@ -1,4 +1,4 @@
-import { assertMonthOpen } from './month_lock.js';
+import { assertMonthOpen, firstClosedMonth, monthClosedPayload } from './month_lock.js';
 
 export async function listActiveUsers(request, env) {
   const auth = await requireSession(request, env);
@@ -15,6 +15,29 @@ export async function createBillExtended(request, env) {
   if (result.error) return json(result, env, result.status || 400);
   await notifyParticipants(env, result.bill.id, 'Nuevo gasto agregado', `${displayName(auth.user)} agregó un gasto: ${result.bill.title} por ${money(result.bill.total_amount)}.`);
   return json({ ok: true, bill: result.bill }, env, 201);
+}
+
+export async function updateBillExtended(request, env) {
+  const auth = await requireSession(request, env);
+  if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
+  const id = pathPart(request, 1);
+  const bill = await getBill(env, id);
+  if (!bill) return json({ error: 'bill_not_found', message: 'Gasto no encontrado.' }, env, 404);
+  const body = await readJson(request);
+  const targetMonth = normalizeMonth(body.service_month || bill.service_month || bill.bill_date);
+  const lockedMonth = await firstClosedMonth(env, [billMonth(bill), targetMonth]);
+  if (lockedMonth) return json(monthClosedPayload(lockedMonth), env, 423);
+  const total = toInt(body.total_amount || bill.total_amount);
+  const participants = normalizeParticipants(body.participants, total);
+  const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
+  if (!participants.length || shareSum !== total) return json({ error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.' }, env, 400);
+  const paidBy = String(body.paid_by_user_id || bill.paid_by_user_id || bill.created_by || auth.user.id).trim();
+  await env.DB.prepare('UPDATE bills SET category_id = ?, title = ?, description = ?, total_amount = ?, bill_date = ?, due_date = ?, service_month = ?, operation_id = ?, paid_by_user_id = ?, updated_at = ? WHERE id = ?')
+    .bind(body.category_id || bill.category_id, body.title || bill.title, body.description ?? bill.description, total, String(body.bill_date || bill.bill_date).slice(0, 10), body.due_date || bill.due_date || null, targetMonth, body.operation_id || bill.operation_id || null, paidBy, new Date().toISOString(), id)
+    .run();
+  await replaceBillParticipants(env, id, participants);
+  await refreshBillStatuses(env, [id]);
+  return json({ ok: true, bill: await getBill(env, id), participants: await getBillParticipants(env, id) }, env);
 }
 
 export async function createReceiptExtended(request, env) {
@@ -85,7 +108,6 @@ export async function listDebtsDetailed(request, env) {
       AND debtor.id != COALESCE(b.paid_by_user_id, b.created_by)
     ORDER BY COALESCE(b.service_month, substr(b.bill_date, 1, 7)) DESC, b.bill_date DESC, b.created_at DESC
   `).all();
-
   const debts = aggregateDebtDetails(details);
   const netSummary = calculateNetSummary(details);
   return json({ debts, details, net_summary: netSummary }, env);
@@ -173,6 +195,18 @@ async function replaceBillParticipants(env, billId, participants) {
   }
 }
 
+async function refreshBillStatuses(env, billIds) {
+  for (const id of [...new Set((billIds || []).filter(Boolean))]) {
+    const summary = await env.DB.prepare('SELECT SUM(share_amount) AS total, SUM(paid_amount) AS paid FROM bill_participants WHERE bill_id = ?').bind(id).first();
+    if (!summary) continue;
+    const total = Number(summary.total || 0);
+    const paid = Number(summary.paid || 0);
+    const status = paid <= 0 ? 'open' : paid >= total ? 'paid' : 'partial';
+    await env.DB.prepare('UPDATE bills SET status = ?, updated_at = ? WHERE id = ?').bind(status, new Date().toISOString(), id).run();
+    await env.DB.prepare("UPDATE bill_participants SET status = CASE WHEN paid_amount >= share_amount THEN 'paid' WHEN paid_amount > 0 THEN 'partial' ELSE 'pending' END WHERE bill_id = ?").bind(id).run();
+  }
+}
+
 async function notifyParticipants(env, billId, subject, message) {
   const { results } = await env.DB.prepare(`SELECT DISTINCT u.email, u.name FROM bill_participants bp JOIN users u ON u.id = bp.user_id WHERE bp.bill_id = ? AND u.status != 'revoked'`).bind(billId).all();
   await sendNotificationEmails(env, results, subject, message);
@@ -205,6 +239,7 @@ async function requireSession(request, env) {
 }
 
 async function getBill(env, id) { return env.DB.prepare('SELECT b.*, c.name AS category_name, c.icon AS category_icon FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.id = ?').bind(id).first(); }
+async function getBillParticipants(env, id) { const { results } = await env.DB.prepare('SELECT bp.*, u.name, u.email FROM bill_participants bp JOIN users u ON u.id = bp.user_id WHERE bp.bill_id = ? ORDER BY u.name, u.email').bind(id).all(); return results; }
 async function getReceipt(env, id) { return env.DB.prepare('SELECT * FROM receipts WHERE id = ?').bind(id).first(); }
 function billMonth(bill) { return normalizeMonth(bill?.service_month || bill?.bill_date || today()); }
 function normalizeParticipants(participants, total) { return (Array.isArray(participants) ? participants : []).map((p) => ({ user_id: String(p.user_id || '').trim(), share_amount: Number(p.share_percent || 0) > 0 ? Math.round(total * Number(p.share_percent) / 100) : toInt(p.share_amount), paid_amount: toInt(p.paid_amount) })).filter((p) => p.user_id && p.share_amount > 0); }
