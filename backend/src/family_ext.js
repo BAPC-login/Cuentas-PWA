@@ -1,3 +1,5 @@
+import { assertMonthOpen } from './month_lock.js';
+
 export async function listActiveUsers(request, env) {
   const auth = await requireSession(request, env);
   if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status);
@@ -35,6 +37,8 @@ export async function deleteBillExtended(request, env) {
   const id = pathPart(request, 1);
   const bill = await getBill(env, id);
   if (!bill) return json({ error: 'bill_not_found', message: 'Gasto no encontrado.' }, env, 404);
+  const locked = await assertMonthOpen(env, billMonth(bill));
+  if (locked) return json(locked, env, locked.status);
   if (auth.user.role !== 'owner' && bill.created_by !== auth.user.id && bill.paid_by_user_id !== auth.user.id) return json({ error: 'not_allowed', message: 'Solo el owner, creador o pagador puede eliminar este gasto.' }, env, 403);
   await env.DB.prepare('DELETE FROM payment_allocations WHERE bill_id = ?').bind(id).run();
   await env.DB.prepare('UPDATE receipts SET status = ?, bill_id = NULL WHERE bill_id = ?').bind('pending_review', id).run().catch(() => null);
@@ -82,6 +86,8 @@ async function createBillRecord(env, user, body) {
   const participants = normalizeParticipants(body.participants, total);
   if (!title || !categoryId || total <= 0) return { error: 'invalid_bill', message: 'Faltan datos del gasto.', status: 400 };
   if (!participants.length) return { error: 'participants_required', message: 'Selecciona al menos un participante.', status: 400 };
+  const locked = await assertMonthOpen(env, serviceMonth);
+  if (locked) return locked;
   const shareSum = participants.reduce((sum, p) => sum + toInt(p.share_amount), 0);
   if (shareSum !== total) return { error: 'invalid_shares', message: 'La suma de participantes debe ser igual al total.', status: 400 };
   const billId = 'bill-' + crypto.randomUUID();
@@ -139,6 +145,7 @@ async function requireSession(request, env) {
 
 async function getBill(env, id) { return env.DB.prepare('SELECT b.*, c.name AS category_name, c.icon AS category_icon FROM bills b JOIN categories c ON c.id = b.category_id WHERE b.id = ?').bind(id).first(); }
 async function getReceipt(env, id) { return env.DB.prepare('SELECT * FROM receipts WHERE id = ?').bind(id).first(); }
+function billMonth(bill) { return normalizeMonth(bill?.service_month || bill?.bill_date || today()); }
 function normalizeParticipants(participants, total) { return (Array.isArray(participants) ? participants : []).map((p) => ({ user_id: String(p.user_id || '').trim(), share_amount: Number(p.share_percent || 0) > 0 ? Math.round(total * Number(p.share_percent) / 100) : toInt(p.share_amount), paid_amount: toInt(p.paid_amount) })).filter((p) => p.user_id && p.share_amount > 0); }
 function displayName(user) { return user?.name || user?.email || 'Un usuario'; }
 function money(value) { return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Number(value || 0)); }
