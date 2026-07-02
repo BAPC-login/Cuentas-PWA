@@ -1,5 +1,5 @@
 import { listCategories, createCategory, listBills, getBillDetails, updateBillParticipants, updateBillStatus, listPayments, createPayment, listReceipts, approveReceipt, rejectReceipt, dashboard, listOperations, getOperationDetails, createOperation, updateOperation } from './family.js';
-import { createBillExtended, createReceiptExtended, deleteBillExtended, listDebtsDetailed } from './family_ext.js';
+import { listActiveUsers, createBillExtended, createReceiptExtended, deleteBillExtended, listDebtsDetailed } from './family_ext.js';
 
 export default {
   async fetch(request, env) {
@@ -13,6 +13,7 @@ export default {
       if (url.pathname === '/auth/logout' && request.method === 'POST') return logout(request, env);
       if (url.pathname === '/me' && request.method === 'GET') return me(request, env);
       if (url.pathname === '/me/profile' && request.method === 'PATCH') return updateMyProfile(request, env);
+      if (url.pathname === '/users' && request.method === 'GET') return listActiveUsers(request, env);
       if (url.pathname === '/owner/users' && request.method === 'GET') return listUsers(request, env);
       if (url.pathname === '/owner/users' && request.method === 'POST') return createUser(request, env);
       if (url.pathname.match(/^\/owner\/users\/[^/]+\/revoke$/) && request.method === 'PATCH') return setUserStatus(request, env, 'revoked');
