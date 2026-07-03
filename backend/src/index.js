@@ -3,6 +3,7 @@ import { listActiveUsers, createBillExtended, createReceiptExtended, deleteBillE
 import { listTemplates, createTemplate, deleteTemplate, duplicateCheck, listMonthClosures, closeMonth, openMonth } from './pro_tools.js';
 import { updateBillFixed } from './bill_fix.js';
 import { createAttachment, listAttachments, getAttachmentFile, createAuditLog, listAuditLogs, finalHealth } from './attachments.js';
+import { createPaymentLite } from './payment_lite.js';
 
 export default {
   async fetch(request, env) {
@@ -44,7 +45,7 @@ export default {
       if (url.pathname === '/month-closures' && request.method === 'POST') return closeMonth(request, env);
       if (url.pathname.match(/^\/month-closures\/[^/]+$/) && request.method === 'DELETE') return openMonth(request, env);
       if (url.pathname === '/payments' && request.method === 'GET') return listPayments(request, env);
-      if (url.pathname === '/payments' && request.method === 'POST') return createPayment(request, env);
+      if (url.pathname === '/payments' && request.method === 'POST') return createPaymentLite(request, env);
       if (url.pathname === '/receipts' && request.method === 'GET') return listReceipts(request, env);
       if (url.pathname === '/receipts' && request.method === 'POST') return createReceiptExtended(request, env);
       if (url.pathname.match(/^\/receipts\/[^/]+\/approve$/) && request.method === 'POST') return approveReceipt(request, env);
@@ -110,21 +111,7 @@ async function sendViaResend(env, to, code) {
 
 function normalizeProviderError(detail) { if (!detail) return 'Proveedor rechazo el envio.'; try { const parsed = JSON.parse(detail); return parsed.message || parsed.error || detail.slice(0, 220); } catch { return detail.slice(0, 220); } }
 
-async function verifyCode(request, env) {
-  const { email, code, name } = await readJson(request);
-  const normalizedEmail = normalizeEmail(email);
-  if (!isEmail(normalizedEmail) || !String(code || '').match(/^\d{6}$/)) return json({ error: 'invalid_input', message: 'Correo o codigo invalido.' }, env, 400);
-  const row = await env.DB.prepare('SELECT * FROM login_codes WHERE email = ? AND code_digest = ? AND used_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1').bind(normalizedEmail, await digest(String(code)), new Date().toISOString()).first();
-  if (!row) return json({ error: 'invalid_or_expired_code', message: 'Codigo invalido o vencido.' }, env, 401);
-  const user = await getUserByEmail(env, normalizedEmail);
-  if (!user || user.status === 'revoked') return json({ error: 'user_not_allowed', message: 'Este usuario no tiene acceso.' }, env, 403);
-  const displayName = String(name || user.name || '').trim();
-  if (!user.name && displayName) await env.DB.prepare('UPDATE users SET name = ?, status = ?, activated_at = ? WHERE id = ?').bind(displayName, 'active', new Date().toISOString(), user.id).run();
-  await env.DB.prepare('UPDATE login_codes SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), row.id).run();
-  const session = await createSession(env, user.id, request.headers.get('user-agent') || '');
-  return json({ ok: true, session, user: publicUser(await getUserById(env, user.id)) }, env);
-}
-
+async function verifyCode(request, env) { const { email, code, name } = await readJson(request); const normalizedEmail = normalizeEmail(email); if (!isEmail(normalizedEmail) || !String(code || '').match(/^\d{6}$/)) return json({ error: 'invalid_input', message: 'Correo o codigo invalido.' }, env, 400); const row = await env.DB.prepare('SELECT * FROM login_codes WHERE email = ? AND code_digest = ? AND used_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1').bind(normalizedEmail, await digest(String(code)), new Date().toISOString()).first(); if (!row) return json({ error: 'invalid_or_expired_code', message: 'Codigo invalido o vencido.' }, env, 401); const user = await getUserByEmail(env, normalizedEmail); if (!user || user.status === 'revoked') return json({ error: 'user_not_allowed', message: 'Este usuario no tiene acceso.' }, env, 403); const displayName = String(name || user.name || '').trim(); if (!user.name && displayName) await env.DB.prepare('UPDATE users SET name = ?, status = ?, activated_at = ? WHERE id = ?').bind(displayName, 'active', new Date().toISOString(), user.id).run(); await env.DB.prepare('UPDATE login_codes SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), row.id).run(); const session = await createSession(env, user.id, request.headers.get('user-agent') || ''); return json({ ok: true, session, user: publicUser(await getUserById(env, user.id)) }, env); }
 async function me(request, env) { const auth = await requireSession(request, env); if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status); return json({ user: publicUser(auth.user) }, env); }
 async function updateMyProfile(request, env) { const auth = await requireSession(request, env); if (auth.error) return json({ error: auth.error, message: auth.message }, env, auth.status); const { name, avatar_url } = await readJson(request); const displayName = String(name || '').trim(); if (displayName.length < 2) return json({ error: 'invalid_name', message: 'El nombre debe tener al menos 2 caracteres.' }, env, 400); await env.DB.prepare('UPDATE users SET name = ?, avatar_url = ?, status = ?, activated_at = COALESCE(activated_at, ?) WHERE id = ?').bind(displayName, avatar_url || null, 'active', new Date().toISOString(), auth.user.id).run(); return json({ ok: true, user: publicUser(await getUserById(env, auth.user.id)) }, env); }
 async function logout(request, env) { const auth = await requireSession(request, env); if (!auth.error) await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), auth.session.id).run(); return json({ ok: true }, env); }
