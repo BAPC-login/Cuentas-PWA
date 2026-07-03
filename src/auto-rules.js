@@ -9,6 +9,7 @@ import('./expense-ledger-pro.js').catch(() => {});
 import('./bill-payment-modal.js').catch(() => {});
 import('./final-net-dashboard.js').catch(() => {});
 import('./operations-tab-pro.js').catch(() => {});
+import('./summary-charts.js').catch(() => {});
 
 const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
