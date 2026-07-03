@@ -4,6 +4,10 @@ import('./payment-allocation-fix.js').catch(() => {});
 import('./evidence-attachment-hook.js').catch(() => {});
 import('./payment-attachment-hook.js').catch(() => {});
 import('./final-health-lite.js').catch(() => {});
+import('./expense-modal-lite.js').catch(() => {});
+import('./expense-ledger-pro.js').catch(() => {});
+import('./bill-payment-modal.js').catch(() => {});
+import('./final-net-dashboard.js').catch(() => {});
 
 const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
