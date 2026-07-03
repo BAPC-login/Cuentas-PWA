@@ -12,6 +12,7 @@ import('./final-net-dashboard.js').catch(() => {});
 import('./operations-tab-pro.js').catch(() => {});
 import('./summary-charts.js').catch(() => {});
 import('./bill-status-lite.js').catch(() => {});
+import('./compound-scope-lite.js').catch(() => {});
 
 const DEFAULT_RULES = [
   { terms: ['mercado libre', 'mercadolibre', 'ml'], categories: ['hogar', 'otros', 'mantención', 'mantencion', 'reparación', 'reparacion'] },
