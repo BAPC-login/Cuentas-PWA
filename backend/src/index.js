@@ -2,6 +2,7 @@ import { listCategories, createCategory, listBills, getBillDetails, updateBillPa
 import { listActiveUsers, createBillExtended, createReceiptExtended, deleteBillExtended, listDebtsDetailed } from './family_ext.js';
 import { listTemplates, createTemplate, deleteTemplate, duplicateCheck, listMonthClosures, closeMonth, openMonth } from './pro_tools.js';
 import { updateBillFixed } from './bill_fix.js';
+import { createAttachment, listAttachments, getAttachmentFile, createAuditLog, listAuditLogs, finalHealth } from './attachments.js';
 
 export default {
   async fetch(request, env) {
@@ -10,6 +11,7 @@ export default {
 
     try {
       if (url.pathname === '/health') return json({ ok: true, emailRelay: Boolean(env.EMAIL_RELAY_URL), resend: Boolean(env.RESEND_API_KEY) }, env);
+      if (url.pathname === '/final/health' && request.method === 'GET') return finalHealth(request, env);
       if (url.pathname === '/auth/request-code' && request.method === 'POST') return requestCode(request, env);
       if (url.pathname === '/auth/verify-code' && request.method === 'POST') return verifyCode(request, env);
       if (url.pathname === '/auth/logout' && request.method === 'POST') return logout(request, env);
@@ -47,6 +49,11 @@ export default {
       if (url.pathname === '/receipts' && request.method === 'POST') return createReceiptExtended(request, env);
       if (url.pathname.match(/^\/receipts\/[^/]+\/approve$/) && request.method === 'POST') return approveReceipt(request, env);
       if (url.pathname.match(/^\/receipts\/[^/]+\/reject$/) && request.method === 'POST') return rejectReceipt(request, env);
+      if (url.pathname === '/attachments' && request.method === 'GET') return listAttachments(request, env);
+      if (url.pathname === '/attachments' && request.method === 'POST') return createAttachment(request, env);
+      if (url.pathname.match(/^\/attachments\/[^/]+$/) && request.method === 'GET') return getAttachmentFile(request, env);
+      if (url.pathname === '/audit' && request.method === 'GET') return listAuditLogs(request, env);
+      if (url.pathname === '/audit' && request.method === 'POST') return createAuditLog(request, env);
       if (url.pathname === '/dashboard' && request.method === 'GET') return dashboard(request, env);
       return json({ error: 'not_found', message: 'Ruta no encontrada.' }, env, 404);
     } catch (error) {
